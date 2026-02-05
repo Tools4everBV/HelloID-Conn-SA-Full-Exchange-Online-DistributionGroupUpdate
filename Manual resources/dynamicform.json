@@ -1,0 +1,155 @@
+[
+  {
+    "label": "Details",
+    "fields": [
+      {
+        "templateOptions": {
+          "title": "Retrieving this information from Exchange takes an average of +/- 10 seconds. Please wait while the data is loaded.",
+          "titleField": "",
+          "bannerType": "Info",
+          "useBody": false
+        },
+        "type": "textbanner",
+        "summaryVisibility": "Hide element",
+        "body": "Text Banner Content",
+        "requiresTemplateOptions": false,
+        "requiresKey": false,
+        "requiresDataSource": false
+      },
+      {
+        "key": "searchGroup",
+        "templateOptions": {
+          "label": "Search",
+          "placeholder": ""
+        },
+        "type": "input",
+        "summaryVisibility": "Hide element",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "gridGroup",
+        "templateOptions": {
+          "label": "Distribution group",
+          "required": true,
+          "grid": {
+            "columns": [
+              {
+                "headerName": "Display Name",
+                "field": "DisplayName"
+              },
+              {
+                "headerName": "Primary Smtp Address",
+                "field": "PrimarySmtpAddress"
+              },
+              {
+                "headerName": "Recipient Type",
+                "field": "RecipientType"
+              },
+              {
+                "headerName": "Guid",
+                "field": "ExternalDirectoryObjectId"
+              }
+            ],
+            "height": 300,
+            "rowSelection": "single"
+          },
+          "dataSourceConfig": {
+            "dataSourceGuid": "$dataSourceGuid_0",
+            "input": {
+              "propertyInputs": [
+                {
+                  "propertyName": "searchValue",
+                  "otherFieldValue": {
+                    "otherFieldKey": "searchGroup"
+                  }
+                }
+              ]
+            }
+          },
+          "useDefault": false,
+          "allowCsvDownload": true
+        },
+        "type": "grid",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": true
+      }
+    ]
+  },
+  {
+    "label": "Group Permissions",
+    "fields": [
+      {
+        "templateOptions": {
+          "title": "Retrieving this information from Exchange takes an average of +/- 30 seconds. Please wait while the data is loaded.",
+          "titleField": "",
+          "bannerType": "Info",
+          "useBody": false
+        },
+        "type": "textbanner",
+        "summaryVisibility": "Hide element",
+        "body": "Text Banner Content",
+        "requiresTemplateOptions": false,
+        "requiresKey": false,
+        "requiresDataSource": false
+      },
+      {
+        "key": "permissionList",
+        "templateOptions": {
+          "label": "Distribution group permissions",
+          "required": false,
+          "filterable": true,
+          "useDataSource": true,
+          "dualList": {
+            "options": [
+              {
+                "guid": "75ea2890-88f8-4851-b202-626123054e14",
+                "Name": "Apple"
+              },
+              {
+                "guid": "0607270d-83e2-4574-9894-0b70011b663f",
+                "Name": "Pear"
+              },
+              {
+                "guid": "1ef6fe01-3095-4614-a6db-7c8cd416ae3b",
+                "Name": "Orange"
+              }
+            ],
+            "optionKeyProperty": "guid",
+            "optionDisplayProperty": "displayValue"
+          },
+          "dataSourceConfig": {
+            "dataSourceGuid": "$dataSourceGuid_1",
+            "input": {
+              "propertyInputs": []
+            }
+          },
+          "destinationDataSourceConfig": {
+            "dataSourceGuid": "$dataSourceGuid_2",
+            "input": {
+              "propertyInputs": [
+                {
+                  "propertyName": "selectedGroup",
+                  "otherFieldValue": {
+                    "otherFieldKey": "gridGroup"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "hideExpression": "!model[\"searchGroup\"]",
+        "type": "duallist",
+        "summaryVisibility": "Show",
+        "sourceDataSourceIdentifierSuffix": "source-datasource",
+        "destinationDataSourceIdentifierSuffix": "destination-datasource",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      }
+    ]
+  }
+]

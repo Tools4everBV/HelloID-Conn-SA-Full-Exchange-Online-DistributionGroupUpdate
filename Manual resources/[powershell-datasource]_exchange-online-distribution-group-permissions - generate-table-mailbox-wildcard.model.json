@@ -1,0 +1,50 @@
+[
+  {
+    "key": "ExternalDirectoryObjectId",
+    "type": 0
+  },
+  {
+    "key": "Identity",
+    "type": 0
+  },
+  {
+    "key": "Alias",
+    "type": 0
+  },
+  {
+    "key": "EmailAddresses",
+    "type": 0
+  },
+  {
+    "key": "DisplayName",
+    "type": 0
+  },
+  {
+    "key": "Name",
+    "type": 0
+  },
+  {
+    "key": "PrimarySmtpAddress",
+    "type": 0
+  },
+  {
+    "key": "RecipientType",
+    "type": 0
+  },
+  {
+    "key": "RecipientTypeDetails",
+    "type": 0
+  },
+  {
+    "key": "ExchangeVersion",
+    "type": 0
+  },
+  {
+    "key": "DistinguishedName",
+    "type": 0
+  },
+  {
+    "key": "OrganizationId",
+    "type": 0
+  }
+]
