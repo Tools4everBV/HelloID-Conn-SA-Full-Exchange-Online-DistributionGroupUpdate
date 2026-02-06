@@ -1,4 +1,4 @@
-# HelloID-Conn-SA-Full-EntraID-AccountDisable
+# HelloID-Conn-SA-Full-Exchange-Online-DistributionGroupUpdate
 
 | :information_source: Information |
 | :------------------------------- |
