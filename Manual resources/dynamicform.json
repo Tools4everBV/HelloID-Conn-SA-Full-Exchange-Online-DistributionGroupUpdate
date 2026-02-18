@@ -1,55 +1,55 @@
 [
   {
-    "label": "Details",
+    "label": "Search Group",
     "fields": [
       {
         "templateOptions": {
-          "title": "Retrieving this information from Exchange takes an average of +/- 10 seconds. Please wait while the data is loaded.",
+          "title": "Retrieving this information from Exchange Online takes an average of +/- 10 seconds.",
           "titleField": "",
           "bannerType": "Info",
-          "useBody": false
+          "useBody": true
         },
         "type": "textbanner",
-        "summaryVisibility": "Hide element",
-        "body": "Text Banner Content",
+        "summaryVisibility": "Show",
+        "body": "Please wait so we can retreive the input.",
         "requiresTemplateOptions": false,
         "requiresKey": false,
         "requiresDataSource": false
       },
       {
-        "key": "searchGroup",
+        "key": "searchfield",
         "templateOptions": {
           "label": "Search",
-          "placeholder": ""
+          "required": true
         },
         "type": "input",
-        "summaryVisibility": "Hide element",
+        "summaryVisibility": "Show",
         "requiresTemplateOptions": true,
         "requiresKey": true,
         "requiresDataSource": false
       },
       {
-        "key": "gridGroup",
+        "key": "distributionGroup",
         "templateOptions": {
-          "label": "Distribution group",
+          "label": "Distribution groups",
           "required": true,
           "grid": {
             "columns": [
               {
-                "headerName": "Display Name",
-                "field": "DisplayName"
+                "headerName": "Name",
+                "field": "name"
+              },
+              {
+                "headerName": "Alias",
+                "field": "Alias"
               },
               {
                 "headerName": "Primary Smtp Address",
-                "field": "PrimarySmtpAddress"
+                "field": "primarySmtpAddress"
               },
               {
-                "headerName": "Recipient Type",
-                "field": "RecipientType"
-              },
-              {
-                "headerName": "Guid",
-                "field": "ExternalDirectoryObjectId"
+                "headerName": "Id",
+                "field": "id"
               }
             ],
             "height": 300,
@@ -62,13 +62,15 @@
                 {
                   "propertyName": "searchValue",
                   "otherFieldValue": {
-                    "otherFieldKey": "searchGroup"
+                    "otherFieldKey": "searchfield"
                   }
                 }
               ]
             }
           },
+          "useFilter": true,
           "useDefault": false,
+          "searchPlaceHolder": "Search this data",
           "allowCsvDownload": true
         },
         "type": "grid",
@@ -80,72 +82,112 @@
     ]
   },
   {
-    "label": "Group Permissions",
+    "label": "Edit Group",
     "fields": [
       {
         "templateOptions": {
-          "title": "Retrieving this information from Exchange takes an average of +/- 30 seconds. Please wait while the data is loaded.",
+          "title": "Retrieving this information from Exchange Online takes an average of +/- 10 seconds.",
           "titleField": "",
           "bannerType": "Info",
-          "useBody": false
+          "useBody": true
         },
         "type": "textbanner",
-        "summaryVisibility": "Hide element",
-        "body": "Text Banner Content",
+        "summaryVisibility": "Show",
+        "body": "Please wait so we can validate the input.",
         "requiresTemplateOptions": false,
         "requiresKey": false,
         "requiresDataSource": false
       },
       {
-        "key": "permissionList",
+        "key": "name",
         "templateOptions": {
-          "label": "Distribution group permissions",
-          "required": false,
-          "filterable": true,
+          "label": "name",
+          "placeholder": "",
+          "required": true,
+          "minLength": 2,
+          "useDependOn": true,
+          "dependOn": "distributionGroup",
+          "dependOnProperty": "name"
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "alias",
+        "templateOptions": {
+          "label": "Alias",
+          "useDependOn": true,
+          "dependOn": "distributionGroup",
+          "dependOnProperty": "Alias",
+          "required": true
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "primarySmtpAddress",
+        "templateOptions": {
+          "label": "PrimarySmtpAddress",
+          "useDependOn": true,
+          "dependOn": "distributionGroup",
+          "dependOnProperty": "primarySmtpAddress",
+          "required": true
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "Validation",
+        "templateOptions": {
+          "label": "Validate",
+          "readonly": true,
           "useDataSource": true,
-          "dualList": {
-            "options": [
-              {
-                "guid": "75ea2890-88f8-4851-b202-626123054e14",
-                "Name": "Apple"
-              },
-              {
-                "guid": "0607270d-83e2-4574-9894-0b70011b663f",
-                "Name": "Pear"
-              },
-              {
-                "guid": "1ef6fe01-3095-4614-a6db-7c8cd416ae3b",
-                "Name": "Orange"
-              }
-            ],
-            "optionKeyProperty": "guid",
-            "optionDisplayProperty": "displayValue"
-          },
+          "pattern": "^Valid.*",
           "dataSourceConfig": {
             "dataSourceGuid": "$dataSourceGuid_1",
             "input": {
-              "propertyInputs": []
-            }
-          },
-          "destinationDataSourceConfig": {
-            "dataSourceGuid": "$dataSourceGuid_2",
-            "input": {
               "propertyInputs": [
                 {
-                  "propertyName": "selectedGroup",
+                  "propertyName": "Name",
                   "otherFieldValue": {
-                    "otherFieldKey": "gridGroup"
+                    "otherFieldKey": "name"
+                  }
+                },
+                {
+                  "propertyName": "PrimarySmtpAddress",
+                  "otherFieldValue": {
+                    "otherFieldKey": "primarySmtpAddress"
+                  }
+                },
+                {
+                  "propertyName": "Alias",
+                  "otherFieldValue": {
+                    "otherFieldKey": "alias"
+                  }
+                },
+                {
+                  "propertyName": "SelectedSM",
+                  "otherFieldValue": {
+                    "otherFieldKey": "searchfield"
                   }
                 }
               ]
             }
-          }
+          },
+          "displayField": "text",
+          "required": true
         },
-        "hideExpression": "!model[\"searchGroup\"]",
-        "type": "duallist",
+        "type": "input",
         "summaryVisibility": "Show",
-        "sourceDataSourceIdentifierSuffix": "source-datasource",
-        "destinationDataSourceIdentifierSuffix": "destination-datasource",
         "requiresTemplateOptions": true,
         "requiresKey": true,
         "requiresDataSource": false

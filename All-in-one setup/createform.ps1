@@ -7,7 +7,7 @@ $portalUrl = "https://CUSTOMER.helloid.com"
 $apiKey = "API_KEY"
 $apiSecret = "API_SECRET"
 $delegatedFormAccessGroupNames = @("") #Only unique names are supported. Groups must exist!
-$delegatedFormCategories = @("Mailbox Management","Exchange Online") #Only unique names are supported. Categories will be created if not exists
+$delegatedFormCategories = @("Exchange Online") #Only unique names are supported. Categories will be created if not exists
 $script:debugLogging = $false #Default value: $false. If $true, the HelloID resource GUIDs will be shown in the logging
 $script:duplicateForm = $false #Default value: $false. If $true, the HelloID resource names will be changed to import a duplicate Form
 $script:duplicateFormSuffix = "_tmp" #the suffix will be added to all HelloID resource names to generate a duplicate form with different resource names
@@ -16,35 +16,41 @@ $script:duplicateFormSuffix = "_tmp" #the suffix will be added to all HelloID re
 #NOTE: You can also update the HelloID Global variable values afterwards in the HelloID Admin Portal: https://<CUSTOMER>.helloid.com/admin/variablelibrary
 $globalHelloIDVariables = [System.Collections.Generic.List[object]]@();
 
-#Global variable #1 >> EntraIdAppId
+#Global variable #1 >> EntraIdCertificatePassword
+$tmpName = @'
+EntraIdCertificatePassword
+'@ 
+$tmpValue = @'
+
+'@
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
+
+#Global variable #2 >> EntraIdAppId
 $tmpName = @'
 EntraIdAppId
 '@ 
 $tmpValue = @'
-'@ 
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
-#Global variable #2 >> EntraIdCertificatePassword
-$tmpName = @'
-EntraIdCertificatePassword
-'@ 
-$tmpValue = "" 
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "True"});
+'@
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
 #Global variable #3 >> EntraIdOrganization
 $tmpName = @'
 EntraIdOrganization
 '@ 
 $tmpValue = @'
-'@ 
+
+'@
 $globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
 #Global variable #4 >> EntraIdCertificateBase64String
 $tmpName = @'
 EntraIdCertificateBase64String
 '@ 
-$tmpValue = "" 
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "True"});
+$tmpValue = @'
+
+'@
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
 
 #make sure write-information logging is visual
@@ -344,97 +350,23 @@ foreach ($item in $globalHelloIDVariables) {
 
 
 <# Begin: HelloID Data sources #>
-<# Begin: DataSource "exchange-online-distribution-group-permissions | generate-table-mailbox-wildcard" #>
+<# Begin: DataSource "Exchange-online-distribution-group-update | Generate-table-update" #>
 $tmpPsScript = @'
-# Warning! When no searchQuery is specified. All mailboxes will be retrieved.
-$searchValue = $datasource.searchValue
-
-if ([String]::IsNullOrEmpty($searchValue) -or $searchValue -eq "*") {
-    $filter = "*"
-}
-else {
-    $filter = "Name -like '*$searchValue*' -or EmailAddresses -like '*$searchValue*'"
-}
-
-# PowerShell commands to import
-$commands = @(
-    "Get-Mailbox"
-    , "Get-EXOMailbox"
-    , "Get-EXORecipient"
-)
-
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 $VerbosePreference = "SilentlyContinue"
 $InformationPreference = "Continue"
 $WarningPreference = "Continue"
 
-#region functions
-function Resolve-HTTPError {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
-    )
-    process {
-        $httpErrorObj = [PSCustomObject]@{
-            FullyQualifiedErrorId = $ErrorObject.FullyQualifiedErrorId
-            MyCommand             = $ErrorObject.InvocationInfo.MyCommand
-            RequestUri            = $ErrorObject.TargetObject.RequestUri
-            ScriptStackTrace      = $ErrorObject.ScriptStackTrace
-            ErrorMessage          = ''
-        }
+# variables configured in form:
+$GroupType = "Distribution Group" # "Mail-enabled Security Group" or "Distribution Group"
+$searchValue = $datasource.searchValue
+$searchQuery = "*$searchValue*"
 
-        if ($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') {
-            # $httpErrorObj.ErrorMessage = $ErrorObject.ErrorDetails.Message # Does not show the correct error message for the Raet IAM API calls
-            $httpErrorObj.ErrorMessage = $ErrorObject.Exception.Message
-
-        }
-        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
-            $httpErrorObj.ErrorMessage = [HelloID.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
-        }
-
-        Write-Output $httpErrorObj
-    }
-}
-
-function Get-ErrorMessage {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
-    )
-    process {
-        $errorMessage = [PSCustomObject]@{
-            VerboseErrorMessage = $null
-            AuditErrorMessage   = $null
-        }
-
-        if ( $($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or $($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-            $httpErrorObject = Resolve-HTTPError -Error $ErrorObject
-
-            $errorMessage.VerboseErrorMessage = $httpErrorObject.ErrorMessage
-
-            $errorMessage.AuditErrorMessage = $httpErrorObject.ErrorMessage
-        }
-
-        # If error message empty, fall back on $ex.Exception.Message
-        if ([String]::IsNullOrEmpty($errorMessage.VerboseErrorMessage)) {
-            $errorMessage.VerboseErrorMessage = $ErrorObject.Exception.Message
-        }
-        if ([String]::IsNullOrEmpty($errorMessage.AuditErrorMessage)) {
-            $errorMessage.AuditErrorMessage = $ErrorObject.Exception.Message
-        }
-
-        Write-Output $errorMessage
-    }
-}
-
+# PowerShell commands to import
+$commands = @("Get-DistributionGroup")
+#endregion init
 function Get-MSEntraCertificate {
     [CmdletBinding()]
     param()
@@ -448,8 +380,6 @@ function Get-MSEntraCertificate {
     }
 }
 
-#endregion functions
-
 #region Import module & connect
 try {    
     $actionMessage = "importing module [ExchangeOnlineManagement]"
@@ -460,11 +390,12 @@ try {
         ErrorAction = "Stop"
     }
     $null = Import-Module @importModuleSplatParams
-    
+
     #region Retrieving certificate
     $actionMessage = "retrieving certificate"
     $certificate = Get-MSEntraCertificate
     #endregion Retrieving certificate
+    
     #region Connect to Microsoft Exchange Online
     # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
     $actionMessage = "connecting to Microsoft Exchange Online"
@@ -497,39 +428,68 @@ catch {
     Write-Error $auditMessage
 }
 
-#region Get Mailboxes
-try {
 
-    $exchangeQuerySplatParams = @{
-        ResultSize = "Unlimited"
-    }
-    if (-not [string]::IsNullOrEmpty($filter)) {
-        $exchangeQuerySplatParams.Add("Filter", $filter)
-    }
+try{
+    #region check distribution group
+    $actionMessage = "getting distribution groups"
 
-    Write-Information "Querying distribution groups that match filter [$($exchangeQuerySplatParams.Filter)]"
-    $distributionGroups = Get-EXORecipient @exchangeQuerySplatParams | Where-Object { $_.RecipientTypeDetails -eq "MailUniversalDistributionGroup" }
+    if (-not [String]::IsNullOrEmpty($searchValue)) {
+        Write-Information "searchQuery: $searchQuery"
 
-    #Include MailUniversalSecurityGroup -> Only if fully cloud
-    #$distributionGroups = Get-EXORecipient @exchangeQuerySplatParams | Where-Object { $_.RecipientTypeDetails -in @("MailUniversalDistributionGroup","MailUniversalSecurityGroup") } 
+        switch ($GroupType) {
+            "Distribution Group" { $recipientTypeDetails = "MailUniversalDistributionGroup" }
+            "Mail-enabled Security Group" { $recipientTypeDetails = "MailUniversalSecurityGroup" }
+            default { $recipientTypeDetails = $null }
+        }
 
-    $distributionGroups = $distributionGroups | Sort-Object -Property DisplayName
-    $resultCount = ($distributionGroups | Measure-Object).Count
-    Write-Information "Result count: $resultCount"
-    
-    if ($resultCount -gt 0) {
-        foreach ($distributionGroup in $distributionGroups) {
-            Write-Output $distributionGroup
+        $baseFilter = "Alias -like '$searchQuery' -or DisplayName -like '$searchQuery' -or Name -like '$searchQuery'"
+
+        if ($null -ne $recipientTypeDetails) {
+            $filterString = "{RecipientTypeDetails -eq '$recipientTypeDetails' -and ($baseFilter)}"
+        }
+        else {
+            $filterString = "{$baseFilter}"
+        }
+
+        $DistributionGroupParams = @{
+            Filter      = $filterString
+            ResultSize  = "Unlimited"
+            Verbose     = $false
+            ErrorAction = "Stop"
+        }
+
+        $groups = Get-DistributionGroup @DistributionGroupParams
+
+        $resultCount = @($groups).Count
+        
+        Write-Information "Result count: $resultCount"
+        
+        if ($resultCount -gt 0) {
+            foreach ($group in $groups) {
+                $returnObject = @{
+                    name               = "$( $group.DisplayName )";
+                    id                 = "$( $group.ExternalDirectoryObjectId )";
+                    primarySmtpAddress = "$( $group.PrimarySmtpAddress )";
+                    Alias              = "$( $group.alias )";
+                }
+
+                Write-Output $returnObject
+            }
         }
     }
+    #endregion check distribution group           
 }
 catch {
     $ex = $PSItem
-    $errorMessage = Get-ErrorMessage -ErrorObject $ex
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorMessage = ($ex.ErrorDetails.Message | Convertfrom-json).error_description
+    }
+    else {
+        $errorMessage = $($ex.Exception.message)
+    }
 
-    Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($($errorMessage.VerboseErrorMessage))"
-
-    throw "Error querying distribution groups that match filter [$($exchangeQuerySplatParams.Filter)]. Error Message: $($errorMessage.AuditErrorMessage)"
+    Write-Error "Error $actionMessage for Exchange Online distribution groups with the query [$searchQuery]. Error: $errorMessage"
 }
 finally {
     # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps
@@ -540,99 +500,46 @@ finally {
     $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams
     Write-Information "Disconnected from Microsoft Exchange Online"
 }
-#endregion Get Mailboxes
+#endregion lookup
 '@ 
 $tmpModel = @'
-[{"key":"ExternalDirectoryObjectId","type":0},{"key":"Identity","type":0},{"key":"Alias","type":0},{"key":"EmailAddresses","type":0},{"key":"DisplayName","type":0},{"key":"Name","type":0},{"key":"PrimarySmtpAddress","type":0},{"key":"RecipientType","type":0},{"key":"RecipientTypeDetails","type":0},{"key":"ExchangeVersion","type":0},{"key":"DistinguishedName","type":0},{"key":"OrganizationId","type":0}]
+[{"key":"Alias","type":0},{"key":"name","type":0},{"key":"id","type":0},{"key":"primarySmtpAddress","type":0}]
 '@ 
 $tmpInput = @'
 [{"description":null,"translateDescription":false,"inputFieldType":1,"key":"searchValue","type":0,"options":1}]
 '@ 
 $dataSourceGuid_0 = [PSCustomObject]@{} 
 $dataSourceGuid_0_Name = @'
-exchange-online-distribution-group-permissions | generate-table-mailbox-wildcard
+Exchange-online-distribution-group-update | Generate-table-update
 '@ 
 Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_0_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "False" -returnObject ([Ref]$dataSourceGuid_0) 
-<# End: DataSource "exchange-online-distribution-group-permissions | generate-table-mailbox-wildcard" #>
+<# End: DataSource "Exchange-online-distribution-group-update | Generate-table-update" #>
 
-<# Begin: DataSource "exchange-online-distribution-group-permissions | group-generate-table-sharedmailbox-left" #>
+<# Begin: DataSource "Exchange-online-distribution-group-update | function-check-online-group-exists" #>
 $tmpPsScript = @'
-# PowerShell commands to import
-$commands = @(
-    "Get-user"
-)
-
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 $VerbosePreference = "SilentlyContinue"
 $InformationPreference = "Continue"
 $WarningPreference = "Continue"
 
-#region functions
-function Resolve-HTTPError {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
-    )
-    process {
-        $httpErrorObj = [PSCustomObject]@{
-            FullyQualifiedErrorId = $ErrorObject.FullyQualifiedErrorId
-            MyCommand             = $ErrorObject.InvocationInfo.MyCommand
-            RequestUri            = $ErrorObject.TargetObject.RequestUri
-            ScriptStackTrace      = $ErrorObject.ScriptStackTrace
-            ErrorMessage          = ''
-        }
+$outputText = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-        if ($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') {
-            # $httpErrorObj.ErrorMessage = $ErrorObject.ErrorDetails.Message # Does not show the correct error message for the Raet IAM API calls
-            $httpErrorObj.ErrorMessage = $ErrorObject.Exception.Message
+# variables configured in form:
+$Name = $datasource.Name
+$currentName = $datasource.SelectedSM.Name
+$currentPrimarySmtpAddress = $datasource.SelectedSM.primarySmtpAddress
+$currentExchangeGuid = $datasource.SelectedSM.id
+$PrimarySmtpAddress = $datasource.PrimarySmtpAddress
+$currentAlias = $datasource.SelectedSM.alias
+$Alias = $datasource.Alias
+$Domain = $PrimarySmtpAddress -Split '@'
+$Domain = $Domain[1]
 
-        }
-        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
-            $httpErrorObj.ErrorMessage = [HelloID.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
-        }
-
-        Write-Output $httpErrorObj
-    }
-}
-
-function Get-ErrorMessage {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
-    )
-    process {
-        $errorMessage = [PSCustomObject]@{
-            VerboseErrorMessage = $null
-            AuditErrorMessage   = $null
-        }
-
-        if ( $($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or $($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-            $httpErrorObject = Resolve-HTTPError -Error $ErrorObject
-
-            $errorMessage.VerboseErrorMessage = $httpErrorObject.ErrorMessage
-
-            $errorMessage.AuditErrorMessage = $httpErrorObject.ErrorMessage
-        }
-
-        # If error message empty, fall back on $ex.Exception.Message
-        if ([String]::IsNullOrEmpty($errorMessage.VerboseErrorMessage)) {
-            $errorMessage.VerboseErrorMessage = $ErrorObject.Exception.Message
-        }
-        if ([String]::IsNullOrEmpty($errorMessage.AuditErrorMessage)) {
-            $errorMessage.AuditErrorMessage = $ErrorObject.Exception.Message
-        }
-
-        Write-Output $errorMessage
-    }
-}
+# PowerShell commands to import
+$commands = @("Get-User", "Get-DistributionGroup")
+#endregion init
 
 function Get-MSEntraCertificate {
     [CmdletBinding()]
@@ -646,360 +553,181 @@ function Get-MSEntraCertificate {
         $PSCmdlet.ThrowTerminatingError($_)
     }
 }
-#endregion functions
-
-#region Import module & connect
-try {    
-    $actionMessage = "importing module [ExchangeOnlineManagement]"
-    $importModuleSplatParams = @{
-        Name        = "ExchangeOnlineManagement"
-        Cmdlet      = $commands
-        Verbose     = $false
-        ErrorAction = "Stop"
-    }
-    $null = Import-Module @importModuleSplatParams
-
-    #region Retrieving certificate
-    $actionMessage = "retrieving certificate"
-    $certificate = Get-MSEntraCertificate
-    #endregion Retrieving certificate
-    
-    #region Connect to Microsoft Exchange Online
-    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
-    $actionMessage = "connecting to Microsoft Exchange Online"
-    $createExchangeSessionSplatParams = @{
-        Organization          = $EntraIdOrganization
-        AppID                 = $EntraIdAppId
-        Certificate           = $certificate
-        CommandName           = $commands
-        ShowBanner            = $false
-        ShowProgress          = $false
-        TrackPerformance      = $false
-        SkipLoadingCmdletHelp = $true
-        SkipLoadingFormatData = $true
-        ErrorAction           = "Stop"
-    }
-    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
-    Write-Information "Connected to Microsoft Exchange Online"
-} 
-catch {
-    $ex = $PSItem
-    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"        
-    }
-    else {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
-    }
-    Write-Warning $warningMessage
-    Write-Error $auditMessage
-}
 
 
-#region Get Users
 try {
-    $properties = @(
-        "Id"
-        , "Guid"
-        , "Name"
-        , "DisplayName"
-        , "UserPrincipalName"
-    )
-
-    $exchangeQuerySplatParams = @{
-        Filter     = "*"
-        ResultSize = "Unlimited"
+    if (($currentName -eq $Name) -and ($currentPrimarySmtpAddress -eq $PrimarySmtpAddress) -and ($currentAlias -eq $Alias)) {
+        $outputText.Add([PSCustomObject]@{
+                Message = "Name [$currentName] not changed"
+                IsError = $true
+            })
+        $outputText.Add([PSCustomObject]@{
+                Message = "PrimarySmtpAddress [$currentPrimarySmtpAddress] not changed"
+                IsError = $true
+            })
+        $outputText.Add([PSCustomObject]@{
+                Message = "Alias [$currentAlias] not changed"
+                IsError = $true
+            })
     }
-    if (-not[String]::IsNullOrEmpty($filter)) {
-        $exchangeQuerySplatParams.Add("Filter", $filter)
-    }
 
-    Write-Information "Querying users that match filter [$($exchangeQuerySplatParams.Filter)]"
-    $users = Get-User @exchangeQuerySplatParams | Select-Object $properties
-
-    $users = $users | Sort-Object -Property Name
-    $resultCount = ($users | Measure-Object).Count
-    Write-Information "Result count: $resultCount"
-
-    # # Filter out users without name
-    # Write-Information "Filtering out users without [name]"
-    # $users = $users | Where-Object { -NOT[String]::IsNullOrEmpty($_.name) }
-    # $resultCount = ($users | Measure-Object).Count
-    # Write-Information "Result count: $resultCount"
-    
-    if ($resultCount -gt 0) {
-        foreach ($user in $users) {
-            $displayValue = $user.displayName + " [" + $user.userPrincipalName + "]"
-            $returnObject = @{
-                displayValue      = $displayValue;
-                userPrincipalName = "$($user.userPrincipalName)";
-                id                = "$($user.id)";
-                guid              = "$($user.guid)";
-            }
-     
-            Write-Output $returnObject
+    if (-not($outputText.isError -contains - $true)) {
+        $actionMessage = "importing module [ExchangeOnlineManagement]"
+        $importModuleSplatParams = @{
+            Name        = "ExchangeOnlineManagement"
+            Cmdlet      = $commands
+            Verbose     = $false
+            ErrorAction = "Stop"
         }
+        $null = Import-Module @importModuleSplatParams
+
+        #region Retrieving certificate
+        $actionMessage = "retrieving certificate"
+        $certificate = Get-MSEntraCertificate
+        #endregion Retrieving certificate
+        
+        #region Connect to Microsoft Exchange Online
+        # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
+        $actionMessage = "connecting to Microsoft Exchange Online"
+        $createExchangeSessionSplatParams = @{
+            Organization          = $EntraIdOrganization
+            AppID                 = $EntraIdAppId
+            Certificate           = $certificate
+            CommandName           = $commands
+            ShowBanner            = $false
+            ShowProgress          = $false
+            TrackPerformance      = $false
+            SkipLoadingCmdletHelp = $true
+            SkipLoadingFormatData = $true
+            ErrorAction           = "Stop"
+        }
+        $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
+        Write-Information "Connected to Microsoft Exchange Online"
+        
+        # Prepare query params for distribution groups (scan all to validate uniqueness)
+        $DistributionGroupParams = @{
+            ResultSize  = 'Unlimited'
+            ErrorAction = 'Stop'
+        }
+
+        $DistributionGroups = Get-DistributionGroup @DistributionGroupParams
+
+        if (-not $DistributionGroups) {
+            Write-Information  "Distribution Group [$Name] is available"
+            $outputText.Add([PSCustomObject]@{
+                    Message = "Distribution Group [$Name] is available"
+                    IsError = $false
+                })
+        }     
+        else {
+            foreach ($record in $DistributionGroups) {
+                # Determine a stable identifier for the group (prefer ExternalDirectoryObjectId, then Guid, then Identity)
+                $recordId = $record.ExternalDirectoryObjectId
+                if (-not $recordId) { $recordId = $record.Guid }
+                if (-not $recordId) { $recordId = $record.Identity }
+
+                if ((($record.Name -eq $Name) -or ($record.DisplayName -eq $Name)) -and ($recordId -ne $currentExchangeGuid)) {
+                    $outputText.Add([PSCustomObject]@{
+                            Message = "Name [$Name] not unique, found on [$($record.Name)]"
+                            IsError = $true
+                        })
+                }
+                if (($record.Alias -eq $Alias) -and ($recordId -ne $currentExchangeGuid)) {
+                    $outputText.Add([PSCustomObject]@{
+                            Message = "Alias [$Alias] not unique, found on [$($record.Name)]"
+                            IsError = $true
+                        })
+                }
+                if ((($record.EmailAddresses -eq "SMTP:$PrimarySmtpAddress") -or ($record.ProxyAddresses -eq "smtp:$PrimarySmtpAddress")) -and ($recordId -ne $currentExchangeGuid)) {
+                    $outputText.Add([PSCustomObject]@{
+                            Message = "PrimarySmtpAddress [$PrimarySmtpAddress] not unique, found on [$($record.Name)]"
+                            IsError = $true
+                        })
+                }
+                elseif (($record.EmailAddresses -eq "SMTP:$Alias@$Domain") -or ($record.ProxyAddresses -eq "smtp:$Alias@$Domain") -and ($recordId -ne $currentExchangeGuid)) {
+                    $outputText.Add([PSCustomObject]@{
+                            Message = "ProxyAddress [$Alias@$Domain] not unique, found on [$($record.Name)]"
+                            IsError = $true
+                        })
+                }
+            }
+        }
+        #endregion check distribution group           
     }
+
+    if ($outputText.isError -contains - $true) {
+        $outputMessage = "Invalid"
+    }
+    else {
+        $outputMessage = "Valid"
+        $outputText.Add([PSCustomObject]@{
+                Message = "Name [$Name] unique"
+                IsError = $false
+            })
+        $outputText.Add([PSCustomObject]@{
+                Message = "Alias [$Alias] unique"
+                IsError = $false
+            })
+        $outputText.Add([PSCustomObject]@{
+                Message = "PrimarySmtpAddress [$PrimarySmtpAddress] unique"
+                IsError = $false
+            })
+    }
+
+    foreach ($text in $outputText) {
+        $outputMessage += " | " + $($text.Message)
+    }
+
+    $returnObject = @{
+        text = $outputMessage
+    }
+
+    Write-Output $returnObject   
 }
 catch {
     $ex = $PSItem
-    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"        
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorMessage = ($ex.ErrorDetails.Message | Convertfrom-json).error_description
     }
     else {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+        $errorMessage = $($ex.Exception.message)
     }
-    Write-Warning $warningMessage
-    Write-Error $auditMessage
-    # exit # use when using multiple try/catch and the script must stop
+
+    Write-Error "Error $actionMessage for Exchange Online distribution group [$Name]. Error: $errorMessage"
+    
+    $outputMessage = "Invalid | Error $actionMessage for Exchange Online distribution group [$Name]. Error: $errorMessage"
+    $returnObject = @{
+        text = $outputMessage
+    }
 }
 finally {
-    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps
-    $deleteExchangeSessionSplatParams = @{
-        Confirm     = $false
-        ErrorAction = "Stop"
-    }
-    $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams
-    Write-Information "Disconnected from Microsoft Exchange Online"
+    Write-Output $returnObject 
 }
-#endregion Get Users
+#endregion lookup
 '@ 
 $tmpModel = @'
-[{"key":"userPrincipalName","type":0},{"key":"id","type":0},{"key":"displayValue","type":0},{"key":"guid","type":0}]
+[{"key":"text","type":0}]
 '@ 
 $tmpInput = @'
-[]
+[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"Name","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"PrimarySmtpAddress","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"Alias","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"SelectedSM","type":0,"options":1}]
 '@ 
 $dataSourceGuid_1 = [PSCustomObject]@{} 
 $dataSourceGuid_1_Name = @'
-exchange-online-distribution-group-permissions | group-generate-table-sharedmailbox-left
+Exchange-online-distribution-group-update | function-check-online-group-exists
 '@ 
 Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_1_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "False" -returnObject ([Ref]$dataSourceGuid_1) 
-<# End: DataSource "exchange-online-distribution-group-permissions | group-generate-table-sharedmailbox-left" #>
-
-<# Begin: DataSource "exchange-online-distribution-group-permissions | group-generate-table-sharedmailbox-right" #>
-$tmpPsScript = @'
-$identity = $datasource.selectedgroup.ExternalDirectoryObjectId
-$Permission = $datasource.Permission
-
-# PowerShell commands to import
-$commands = @(
-    "Get-Mailbox"
-    , "Get-EXOMailbox"
-    , "Get-User"
-    , "Get-DistributionGroupMember"
-)
-
-# Set TLS to accept TLS, TLS 1.1 and TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
-
-$VerbosePreference = "SilentlyContinue"
-$InformationPreference = "Continue"
-$WarningPreference = "Continue"
-
-#region functions
-function Resolve-HTTPError {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
-    )
-    process {
-        $httpErrorObj = [PSCustomObject]@{
-            FullyQualifiedErrorId = $ErrorObject.FullyQualifiedErrorId
-            MyCommand             = $ErrorObject.InvocationInfo.MyCommand
-            RequestUri            = $ErrorObject.TargetObject.RequestUri
-            ScriptStackTrace      = $ErrorObject.ScriptStackTrace
-            ErrorMessage          = ''
-        }
-
-        if ($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') {
-            # $httpErrorObj.ErrorMessage = $ErrorObject.ErrorDetails.Message # Does not show the correct error message for the Raet IAM API calls
-            $httpErrorObj.ErrorMessage = $ErrorObject.Exception.Message
-
-        }
-        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
-            $httpErrorObj.ErrorMessage = [HelloID.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
-        }
-
-        Write-Output $httpErrorObj
-    }
-}
-
-function Get-ErrorMessage {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
-    )
-    process {
-        $errorMessage = [PSCustomObject]@{
-            VerboseErrorMessage = $null
-            AuditErrorMessage   = $null
-        }
-
-        if ( $($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or $($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-            $httpErrorObject = Resolve-HTTPError -Error $ErrorObject
-
-            $errorMessage.VerboseErrorMessage = $httpErrorObject.ErrorMessage
-
-            $errorMessage.AuditErrorMessage = $httpErrorObject.ErrorMessage
-        }
-
-        # If error message empty, fall back on $ex.Exception.Message
-        if ([String]::IsNullOrEmpty($errorMessage.VerboseErrorMessage)) {
-            $errorMessage.VerboseErrorMessage = $ErrorObject.Exception.Message
-        }
-        if ([String]::IsNullOrEmpty($errorMessage.AuditErrorMessage)) {
-            $errorMessage.AuditErrorMessage = $ErrorObject.Exception.Message
-        }
-
-        Write-Output $errorMessage
-    }
-}
-
-function Get-MSEntraCertificate {
-    [CmdletBinding()]
-    param()
-    try {
-        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)
-        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
-        Write-Output $certificate
-    }
-    catch {
-        $PSCmdlet.ThrowTerminatingError($_)
-    }
-}
-#endregion functions
-
-#region Import module & connect
-try {    
-    $actionMessage = "importing module [ExchangeOnlineManagement]"
-    $importModuleSplatParams = @{
-        Name        = "ExchangeOnlineManagement"
-        Cmdlet      = $commands
-        Verbose     = $false
-        ErrorAction = "Stop"
-    }
-    $null = Import-Module @importModuleSplatParams
-
-    #region Retrieving certificate
-    $actionMessage = "retrieving certificate"
-    $certificate = Get-MSEntraCertificate
-    #endregion Retrieving certificate
-    
-    #region Connect to Microsoft Exchange Online
-    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
-    $actionMessage = "connecting to Microsoft Exchange Online"
-    $createExchangeSessionSplatParams = @{
-        Organization          = $EntraIdOrganization
-        AppID                 = $EntraIdAppId
-        Certificate           = $certificate
-        CommandName           = $commands
-        ShowBanner            = $false
-        ShowProgress          = $false
-        TrackPerformance      = $false
-        SkipLoadingCmdletHelp = $true
-        SkipLoadingFormatData = $true
-        ErrorAction           = "Stop"
-    }
-    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
-    Write-Information "Connected to Microsoft Exchange Online"
-} 
-catch {
-    $ex = $PSItem
-    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"        
-    }
-    else {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
-    }
-    Write-Warning $warningMessage
-    Write-Error $auditMessage
-}
-
-# Get current mailbox permissions
-try {
-    Write-Information "Getting members of distribution group [$identity]"
-
-    $members = Get-DistributionGroupMember -Identity $identity -ResultSize Unlimited
-
-    $users = foreach ($member in $members) {
-        # Alleen echte users ophalen (skip contacts/groups)
-        if ($member.RecipientTypeDetails -eq 'UserMailbox') {
-            Get-User -Identity $member.Identity -ErrorAction SilentlyContinue
-        }
-    }
-
-    $users = $users | Sort-Object DisplayName
-
-    foreach ($user in $users) {
-        $displayValue = "$($user.DisplayName) [$($user.UserPrincipalName)]"
-
-        Write-Output @{
-            displayValue      = $displayValue
-            userPrincipalName = $user.UserPrincipalName
-            id                = $user.Id
-            guid              = $user.Guid
-        }
-    }
-
-}
-catch {
-    $ex = $PSItem
-    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"        
-    }
-    else {
-        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
-    }
-    Write-Warning $warningMessage
-    Write-Error $auditMessage
-    # exit # use when using multiple try/catch and the script must stop
-}
-finally {
-    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps
-    $deleteExchangeSessionSplatParams = @{
-        Confirm     = $false
-        ErrorAction = "Stop"
-    }
-    $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams
-    Write-Information "Disconnected from Microsoft Exchange Online"
-}
-'@ 
-$tmpModel = @'
-[{"key":"userPrincipalName","type":0},{"key":"id","type":0},{"key":"displayValue","type":0},{"key":"guid","type":0}]
-'@ 
-$tmpInput = @'
-[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"selectedGroup","type":0,"options":1}]
-'@ 
-$dataSourceGuid_2 = [PSCustomObject]@{} 
-$dataSourceGuid_2_Name = @'
-exchange-online-distribution-group-permissions | group-generate-table-sharedmailbox-right
-'@ 
-Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_2_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "False" -returnObject ([Ref]$dataSourceGuid_2) 
-<# End: DataSource "exchange-online-distribution-group-permissions | group-generate-table-sharedmailbox-right" #>
+<# End: DataSource "Exchange-online-distribution-group-update | function-check-online-group-exists" #>
 <# End: HelloID Data sources #>
 
-<# Begin: Dynamic Form "Exchange online - Distribution Group - Manage permissions" #>
+<# Begin: Dynamic Form "Exchange online - Distribution Group - Update" #>
 $tmpSchema = @"
-[{"label":"Details","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange takes an average of +/- 10 seconds. Please wait while the data is loaded.","titleField":"","bannerType":"Info","useBody":false},"type":"textbanner","summaryVisibility":"Hide element","body":"Text Banner Content","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"searchGroup","templateOptions":{"label":"Search","placeholder":""},"type":"input","summaryVisibility":"Hide element","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"gridGroup","templateOptions":{"label":"Distribution group","required":true,"grid":{"columns":[{"headerName":"Display Name","field":"DisplayName"},{"headerName":"Primary Smtp Address","field":"PrimarySmtpAddress"},{"headerName":"Recipient Type","field":"RecipientType"},{"headerName":"Guid","field":"ExternalDirectoryObjectId"}],"height":300,"rowSelection":"single"},"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_0","input":{"propertyInputs":[{"propertyName":"searchValue","otherFieldValue":{"otherFieldKey":"searchGroup"}}]}},"useDefault":false,"allowCsvDownload":true},"type":"grid","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":true}]},{"label":"Group Permissions","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange takes an average of +/- 30 seconds. Please wait while the data is loaded.","titleField":"","bannerType":"Info","useBody":false},"type":"textbanner","summaryVisibility":"Hide element","body":"Text Banner Content","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"permissionList","templateOptions":{"label":"Distribution group permissions","required":false,"filterable":true,"useDataSource":true,"dualList":{"options":[{"guid":"75ea2890-88f8-4851-b202-626123054e14","Name":"Apple"},{"guid":"0607270d-83e2-4574-9894-0b70011b663f","Name":"Pear"},{"guid":"1ef6fe01-3095-4614-a6db-7c8cd416ae3b","Name":"Orange"}],"optionKeyProperty":"guid","optionDisplayProperty":"displayValue"},"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_1","input":{"propertyInputs":[]}},"destinationDataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_2","input":{"propertyInputs":[{"propertyName":"selectedGroup","otherFieldValue":{"otherFieldKey":"gridGroup"}}]}}},"hideExpression":"!model[\"searchGroup\"]","type":"duallist","summaryVisibility":"Show","sourceDataSourceIdentifierSuffix":"source-datasource","destinationDataSourceIdentifierSuffix":"destination-datasource","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false}]}]
+[{"label":"Search Group","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange Online takes an average of +/- 10 seconds.","titleField":"","bannerType":"Info","useBody":true},"type":"textbanner","summaryVisibility":"Show","body":"Please wait so we can retreive the input.","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"searchfield","templateOptions":{"label":"Search","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"distributionGroup","templateOptions":{"label":"Distribution groups","required":true,"grid":{"columns":[{"headerName":"Name","field":"name"},{"headerName":"Alias","field":"Alias"},{"headerName":"Primary Smtp Address","field":"primarySmtpAddress"},{"headerName":"Id","field":"id"}],"height":300,"rowSelection":"single"},"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_0","input":{"propertyInputs":[{"propertyName":"searchValue","otherFieldValue":{"otherFieldKey":"searchfield"}}]}},"useFilter":true,"useDefault":false,"searchPlaceHolder":"Search this data","allowCsvDownload":true},"type":"grid","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":true}]},{"label":"Edit Group","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange Online takes an average of +/- 10 seconds.","titleField":"","bannerType":"Info","useBody":true},"type":"textbanner","summaryVisibility":"Show","body":"Please wait so we can validate the input.","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"name","templateOptions":{"label":"name","placeholder":"","required":true,"minLength":2,"useDependOn":true,"dependOn":"distributionGroup","dependOnProperty":"name"},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"alias","templateOptions":{"label":"Alias","useDependOn":true,"dependOn":"distributionGroup","dependOnProperty":"Alias","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"primarySmtpAddress","templateOptions":{"label":"PrimarySmtpAddress","useDependOn":true,"dependOn":"distributionGroup","dependOnProperty":"primarySmtpAddress","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"Validation","templateOptions":{"label":"Validate","readonly":true,"useDataSource":true,"pattern":"^Valid.*","dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_1","input":{"propertyInputs":[{"propertyName":"Name","otherFieldValue":{"otherFieldKey":"name"}},{"propertyName":"PrimarySmtpAddress","otherFieldValue":{"otherFieldKey":"primarySmtpAddress"}},{"propertyName":"Alias","otherFieldValue":{"otherFieldKey":"alias"}},{"propertyName":"SelectedSM","otherFieldValue":{"otherFieldKey":"searchfield"}}]}},"displayField":"text","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false}]}]
 "@ 
 
 $dynamicFormGuid = [PSCustomObject]@{} 
 $dynamicFormName = @'
-Exchange online - Distribution Group - Manage permissions
+Exchange online - Distribution Group - Update
 '@ 
 Invoke-HelloIDDynamicForm -FormName $dynamicFormName -FormSchema $tmpSchema  -returnObject ([Ref]$dynamicFormGuid) 
 <# END: Dynamic Form #>
@@ -1056,12 +784,12 @@ $delegatedFormCategoryGuids = (ConvertTo-Json -InputObject $delegatedFormCategor
 <# Begin: Delegated Form #>
 $delegatedFormRef = [PSCustomObject]@{guid = $null; created = $null} 
 $delegatedFormName = @'
-Exchange online - Distribution Group - Manage permissions
+Exchange online - Distribution Group - Update
 '@
 $tmpTask = @'
-{"name":"Exchange online - Distribution Group - Manage permissions","script":"$identity = $form.gridGroup.ExternalDirectoryObjectId\r\n$usersToAdd = $form.permissionList.leftToRight\r\n$usersToRemove = $form.permissionList.rightToLeft\r\n\r\n# PowerShell commands to import\r\n$commands = @(\r\n    \"Get-EXORecipient\",\r\n    \"Add-DistributionGroupMember\",\r\n    \"Remove-DistributionGroupMember\"\r\n)\r\n\r\n# Set TLS to accept TLS, TLS 1.1 and TLS 1.2\r\n[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12\r\n\r\n$VerbosePreference = \"SilentlyContinue\"\r\n$InformationPreference = \"Continue\"\r\n$WarningPreference = \"Continue\"\r\n\r\n#region functions\r\nfunction Resolve-HTTPError {\r\n    [CmdletBinding()]\r\n    param (\r\n        [Parameter(Mandatory,\r\n            ValueFromPipeline\r\n        )]\r\n        [object]$ErrorObject\r\n    )\r\n    process {\r\n        $httpErrorObj = [PSCustomObject]@{\r\n            FullyQualifiedErrorId = $ErrorObject.FullyQualifiedErrorId\r\n            MyCommand             = $ErrorObject.InvocationInfo.MyCommand\r\n            RequestUri            = $ErrorObject.TargetObject.RequestUri\r\n            ScriptStackTrace      = $ErrorObject.ScriptStackTrace\r\n            ErrorMessage          = ''\r\n        }\r\n\r\n        if ($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') {\r\n            # $httpErrorObj.ErrorMessage = $ErrorObject.ErrorDetails.Message # Does not show the correct error message for the Raet IAM API calls\r\n            $httpErrorObj.ErrorMessage = $ErrorObject.Exception.Message\r\n\r\n        }\r\n        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {\r\n            $httpErrorObj.ErrorMessage = [HelloID.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()\r\n        }\r\n\r\n        Write-Output $httpErrorObj\r\n    }\r\n}\r\n\r\nfunction Get-ErrorMessage {\r\n    [CmdletBinding()]\r\n    param (\r\n        [Parameter(Mandatory,\r\n            ValueFromPipeline\r\n        )]\r\n        [object]$ErrorObject\r\n    )\r\n    process {\r\n        $errorMessage = [PSCustomObject]@{\r\n            VerboseErrorMessage = $null\r\n            AuditErrorMessage   = $null\r\n        }\r\n\r\n        if ( $($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or $($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException')) {\r\n            $httpErrorObject = Resolve-HTTPError -Error $ErrorObject\r\n\r\n            $errorMessage.VerboseErrorMessage = $httpErrorObject.ErrorMessage\r\n\r\n            $errorMessage.AuditErrorMessage = $httpErrorObject.ErrorMessage\r\n        }\r\n\r\n        # If error message empty, fall back on $ex.Exception.Message\r\n        if ([String]::IsNullOrEmpty($errorMessage.VerboseErrorMessage)) {\r\n            $errorMessage.VerboseErrorMessage = $ErrorObject.Exception.Message\r\n        }\r\n        if ([String]::IsNullOrEmpty($errorMessage.AuditErrorMessage)) {\r\n            $errorMessage.AuditErrorMessage = $ErrorObject.Exception.Message\r\n        }\r\n\r\n        Write-Output $errorMessage\r\n    }\r\n}\r\n\r\nfunction Get-MSEntraCertificate {\r\n    [CmdletBinding()]\r\n    param()\r\n    try {\r\n        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)\r\n        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)\r\n        Write-Output $certificate\r\n    }\r\n    catch {\r\n        $PSCmdlet.ThrowTerminatingError($_)\r\n    }\r\n}\r\n#endregion functions\r\n\r\n#region Import module & connect\r\ntry {    \r\n    $actionMessage = \"importing module [ExchangeOnlineManagement]\"\r\n    $importModuleSplatParams = @{\r\n        Name        = \"ExchangeOnlineManagement\"\r\n        Cmdlet      = $commands\r\n        Verbose     = $false\r\n        ErrorAction = \"Stop\"\r\n    }\r\n    $null = Import-Module @importModuleSplatParams\r\n\r\n    #region Retrieving certificate\r\n    $actionMessage = \"retrieving certificate\"\r\n    $certificate = Get-MSEntraCertificate\r\n    #endregion Retrieving certificate\r\n    \r\n    #region Connect to Microsoft Exchange Online\r\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps\r\n    $actionMessage = \"connecting to Microsoft Exchange Online\"\r\n    $createExchangeSessionSplatParams = @{\r\n        Organization          = $EntraIdOrganization\r\n        AppID                 = $EntraIdAppId\r\n        Certificate           = $certificate\r\n        CommandName           = $commands\r\n        ShowBanner            = $false\r\n        ShowProgress          = $false\r\n        TrackPerformance      = $false\r\n        SkipLoadingCmdletHelp = $true\r\n        SkipLoadingFormatData = $true\r\n        ErrorAction           = \"Stop\"\r\n    }\r\n    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams\r\n    Write-Information \"Connected to Microsoft Exchange Online\"\r\n} \r\ncatch {\r\n    $ex = $PSItem\r\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\r\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"        \r\n    }\r\n    else {\r\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\r\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\r\n    }\r\n    Write-Warning $warningMessage\r\n    Write-Error $auditMessage\r\n}\r\n\r\n#region Get Distributiongroup\r\ntry {\r\n    $exchangeQuerySplatParams = @{\r\n        Identity    = $identity\r\n        ErrorAction = \"Stop\"\r\n    }\r\n\r\n    Write-Information \"Querying distribution group with identity [$identity]\"\r\n    $Group = Get-EXORecipient @exchangeQuerySplatParams\r\n\r\n}\r\ncatch {\r\n    $ex = $PSItem\r\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\r\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n    }\r\n    else {\r\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\r\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\r\n    }\r\n    $log = @{\r\n        Action            = \"undefined\" # optional. ENUM (undefined = default) \r\n        System            = \"ExchangeOnline\" # optional (free format text) \r\n        Message           = $auditMessage # required (free format text) \r\n        IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n        TargetDisplayName = \"$($form.gridGroup.DisplayName)\" # optional (free format text) \r\n        TargetIdentifier  = \"$($form.gridGroup.ExternalDirectoryObjectId)\" # optional (free format text) \r\n    }\r\n    Write-Information -Tags \"Audit\" -MessageData $log\r\n    Write-Warning $warningMessage\r\n    Write-Error $auditMessage\r\n    exit # use when using multiple try/catch and the script must stop\r\n}\r\n#endregion Get Distributiongroup\r\n\r\n\r\n#region Grant selected users to distribution group\r\nforeach ($userToAdd in $usersToAdd) {\r\n    try {\r\n        Write-Verbose \"Granting access to distributiongroup [$($group.DisplayName) ($($group.ExternalDirectoryObjectId))] for user [$($userToAdd.UserPrincipalName) ($($userToAdd.guid))]\"\r\n\r\n        $addMemberSplatParams = @{\r\n            Identity    = $group.ExternalDirectoryObjectId\r\n            Member      = $userToAdd.Guid\r\n            ErrorAction = \"SilentlyContinue\"\r\n        }\r\n\r\n        $null = Add-DistributionGroupMember @addMemberSplatParams\r\n\r\n        Write-Information \"Successfully granted access to distributiongroup [$($group.DisplayName) ($($group.ExternalDirectoryObjectId))] for user [$($userToAdd.UserPrincipalName) ($($userToAdd.guid))]\"\r\n\r\n        # Audit log for HelloID\r\n        $Log = @{\r\n            Action            = \"GrantMembership\" # optional. ENUM (undefined = default) \r\n            System            = \"Exchange\" # optional (free format text) \r\n            Message           = \"Successfully granted access to distributiongroup [$($group.DisplayName) ($($group.ExternalDirectoryObjectId))] for user [$($userToAdd.UserPrincipalName) ($($userToAdd.guid))]\" # required (free format text) \r\n            IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = $group.DisplayName # optional (free format text)\r\n            TargetIdentifier  = $([string]$group.ExternalDirectoryObjectId) # optional (free format text)\r\n        }\r\n        #send result back\r\n        Write-Information -Tags \"Audit\" -MessageData $log\r\n    }\r\n    catch {\r\n        $ex = $PSItem\r\n        if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\r\n            $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n            $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n        }\r\n        else {\r\n            $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\r\n            $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\r\n        }\r\n        $log = @{\r\n            Action            = \"undefined\" # optional. ENUM (undefined = default) \r\n            System            = \"ExchangeOnline\" # optional (free format text) \r\n            Message           = $auditMessage # required (free format text) \r\n            IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = \"$($userToAdd.displayValue)\" # optional (free format text) \r\n            TargetIdentifier  = \"$($userToAdd.guid)\" # optional (free format text) \r\n        }\r\n        Write-Information -Tags \"Audit\" -MessageData $log\r\n        Write-Warning $warningMessage\r\n        Write-Error $auditMessage\r\n        # exit # use when using multiple try/catch and the script must stop\r\n    }\r\n}\r\n\r\n#region Revoke selected users from distribution group\r\nforeach ($userToRemove in $usersToRemove) {\r\n    try {\r\n        Write-Verbose \"Revoking permission from distributiongroup [$($group.DisplayName) ($($group.ExternalDirectoryObjectId))] for user [$($userToRemove.UserPrincipalName) ($($userToRemove.guid))]\"\r\n\r\n        $removeMemberSplatParams = @{\r\n            Identity    = $group.ExternalDirectoryObjectId\r\n            Member      = $userToRemove.Guid\r\n            Confirm     = $false\r\n            ErrorAction = \"SilentlyContinue\"\r\n        }\r\n\r\n        $null = Remove-DistributionGroupMember @removeMemberSplatParams\r\n\r\n        Write-Information \"Successfully revoked permission from distributiongroup [$($group.DisplayName) ($($group.ExternalDirectoryObjectId))] for user [$($userToRemove.UserPrincipalName) ($($userToRemove.guid))]\"\r\n\r\n        # Audit log for HelloID\r\n        $Log = @{\r\n            Action            = \"RevokeMembership\" # optional. ENUM (undefined = default) \r\n            System            = \"Exchange\" # optional (free format text) \r\n            Message           = \"Successfully revoked permission from distributiongroup [$($group.DisplayName) ($($group.ExternalDirectoryObjectId))] for user [$($userToRemove.UserPrincipalName) ($($userToRemove.guid))]\" # required (free format text) \r\n            IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = $group.DisplayName # optional (free format text)\r\n            TargetIdentifier  = $([string]$group.ExternalDirectoryObjectId) # optional (free format text)\r\n        }\r\n        #send result back\r\n        Write-Information -Tags \"Audit\" -MessageData $log\r\n    }\r\n    catch {\r\n        $ex = $PSItem\r\n        if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\r\n            $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n            $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"\r\n        }\r\n        else {\r\n            $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\r\n            $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\r\n        }\r\n        $log = @{\r\n            Action            = \"undefined\" # optional. ENUM (undefined = default) \r\n            System            = \"ExchangeOnline\" # optional (free format text) \r\n            Message           = $auditMessage # required (free format text) \r\n            IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \r\n            TargetDisplayName = \"$($userToRemove.displayValue)\" # optional (free format text) \r\n            TargetIdentifier  = \"$($userToRemove.guid)\" # optional (free format text) \r\n        }\r\n        Write-Information -Tags \"Audit\" -MessageData $log\r\n        Write-Warning $warningMessage\r\n        Write-Error $auditMessage\r\n        # exit # use when using multiple try/catch and the script must stop\r\n    }\r\n}\r\n\r\n#Remove Exchange session\r\n# Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps\r\n$deleteExchangeSessionSplatParams = @{\r\n    Confirm     = $false\r\n    ErrorAction = \"Stop\"\r\n}\r\n$null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams\r\nWrite-Information \"Disconnected from Microsoft Exchange Online\"\r\n","runInCloud":false}
+{"name":"Exchange online - Distribution Group - Update","script":"# Enable TLS1.2\n[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12\n\n$VerbosePreference = \"SilentlyContinue\"\n$InformationPreference = \"Continue\"\n$WarningPreference = \"Continue\"\n\n# variables configured in form:\n$exchangeDGGUID = $form.distributionGroup.id\n$name = $form.name\n$alias = $form.alias\n$primarySmtpAddress = $form.primarySmtpAddress\n\n# PowerShell commands to import\n$commands = @(\"Get-DistributionGroup\", \"Set-DistributionGroup\")\n#endregion init\n\n#region functions\n\n#endregion functions\n\nfunction Get-MSEntraCertificate {\n    [CmdletBinding()]\n    param()\n    try {\n        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)\n        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)\n        Write-Output $certificate\n    }\n    catch {\n        $PSCmdlet.ThrowTerminatingError($_)\n    }\n}\n\n#region Import module & connect\ntry {    \n    $actionMessage = \"importing module [ExchangeOnlineManagement]\"\n    $importModuleSplatParams = @{\n        Name        = \"ExchangeOnlineManagement\"\n        Verbose     = $false\n        ErrorAction = \"Stop\"\n    }\n    $null = Import-Module @importModuleSplatParams\n\n    #region Retrieving certificate\n    $actionMessage = \"retrieving certificate\"\n    $certificate = Get-MSEntraCertificate\n    #endregion Retrieving certificate\n    \n    #region Connect to Microsoft Exchange Online\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps\n    $actionMessage = \"connecting to Microsoft Exchange Online\"\n    $createExchangeSessionSplatParams = @{\n        Organization          = $EntraIdOrganization\n        AppID                 = $EntraIdAppId\n        Certificate           = $certificate\n        CommandName           = $commands\n        ShowBanner            = $false\n        ShowProgress          = $false\n        TrackPerformance      = $false\n        SkipLoadingCmdletHelp = $true\n        SkipLoadingFormatData = $true\n        ErrorAction           = \"Stop\"\n    }\n    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams\n    Write-Information \"Connected to Microsoft Exchange Online\"\n} \ncatch {\n    $ex = $PSItem\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"        \n    }\n    else {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\n    }\n    Write-Warning $warningMessage\n    Write-Error $auditMessage\n}\n\n\n\n#region get distribution group\ntry{\n    $GetDistributionGroupParams = @{\n        Identity    = $exchangeDGGUID\n        ErrorAction = 'Stop'\n    }\n\n    $distributionGroup = Get-DistributionGroup @GetDistributionGroupParams\n    $currentAddresses = $distributionGroup.EmailAddresses\n    $proxyAddresses = @()\n    foreach ($address in $currentAddresses) {\n        if ($address.StartsWith('SMTP:')) {\n            $address = $address -replace 'SMTP:', 'smtp:'\n        }\n        if ($address -ne \"smtp:\" + $primarySmtpAddress) {\n            $proxyAddresses += $address\n        }\n    }\n\n    # Set new primary SMTP as uppercase 'SMTP:' and keep other proxies as lowercase 'smtp:'\n    $proxyAddresses += 'SMTP:' + $primarySmtpAddress\n\n    #region update distribution group\n    $actionMessage = \"updating distribution group\"\n\n    $UpdateDistributionGroupParams = @{\n        Identity       = $exchangeDGGUID\n        DisplayName    = $name\n        Name           = $name\n        EmailAddresses = $proxyAddresses\n        Alias          = $alias\n        ErrorAction    = 'Stop'\n    }\n\n    Set-DistributionGroup @UpdateDistributionGroupParams\n \n    Write-Information  \"Distribution Group [$name] updated successfully\" \n    $Log = @{\n        Action            = \"UpdateResource\" # optional. ENUM (undefined = default) \n        System            = \"Exchange Online\" # optional (free format text) \n        Message           = \"Distribution Group [$name] updated successfully\"  # required (free format text) \n        IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \n        TargetDisplayName = $name # optional (free format text) \n        TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) \n    }\n    #send result back  \n    Write-Information -Tags \"Audit\" -MessageData $log \n}\ncatch {\n    $ex = $PSItem\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"\n    }\n    else {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\n    }\n   $Log = @{\n        Action            = \"UpdateResource\" # optional. ENUM (undefined = default) \n        System            = \"Exchange Online\" # optional (free format text) \n        Message           = \"Error $actionMessage for Exchange Online distribution group [$name]\" # required (free format text) \n        IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \n        TargetDisplayName = $name # optional (free format text) \n        TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) \n    }\n    Write-Information -Tags \"Audit\" -MessageData $log\n    Write-Warning $warningMessage\n    Write-Error $auditMessage\n    # exit # use when using multiple try/catch and the script must stop\n}\nfinally {\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps\n    $deleteExchangeSessionSplatParams = @{\n        Confirm     = $false\n        ErrorAction = \"Stop\"\n    }\n    $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams\n    Write-Information \"Disconnected from Microsoft Exchange Online\"\n}","runInCloud":false}
 '@ 
 
-Invoke-HelloIDDelegatedForm -DelegatedFormName $delegatedFormName -DynamicFormGuid $dynamicFormGuid -AccessGroups $delegatedFormAccessGroupGuids -Categories $delegatedFormCategoryGuids -UseFaIcon "True" -FaIcon "fa fa-pencil-square" -task $tmpTask -returnObject ([Ref]$delegatedFormRef) 
+Invoke-HelloIDDelegatedForm -DelegatedFormName $delegatedFormName -DynamicFormGuid $dynamicFormGuid -AccessGroups $delegatedFormAccessGroupGuids -Categories $delegatedFormCategoryGuids -UseFaIcon "True" -FaIcon "fa fa-users" -task $tmpTask -returnObject ([Ref]$delegatedFormRef) 
 <# End: Delegated Form #>
 
