@@ -7,14 +7,15 @@
 ## Description
 HelloID-Conn-SA-Full-ExchangeOnline-DistributionGroupUpdate is a template designed for use with HelloID Service Automation (SA) Delegated Forms. It can be imported into HelloID and customized according to your requirements.
 
-By using this delegated form, you can manage distribution groups permissions in Exchange Online. The following options are available:
+With this delegated form you can search for a Distribution Group and update its core properties in Exchange Online. The form implements the flow defined in the provided script (All-in-one setup/createform.ps1):
  1. Search and select the distribution group (wildcard search supported)
- 3. Add or remove users from the selected permission via a dual list
- 4. Submit the form to apply the changes in Exchange Online
+ 2. Edit the group’s `Name`, `Alias`, and `PrimarySmtpAddress`
+ 3. Validate the changes against Exchange Online
+ 4. Submit the form to apply the updates in Exchange Online
 
 Notes shown in the form:
 - Retrieving groups typically takes ~10 seconds
-- Retrieving groups permissions typically takes ~30 seconds
+- Validation typically takes ~10 seconds
 
 ## Getting started
 ### Requirements
@@ -30,41 +31,35 @@ Follow the official Microsoft documentation for creating an App Registration and
 
 Once you have completed the Microsoft setup and followed their best practices, configure the following HelloID-specific requirements.
 
-- **API Permissions** (Application permissions):
-  - `User.ReadWrite.All`
-  - `Group.ReadWrite.All`
-  - `GroupMember.ReadWrite.All`
-  - `UserAuthenticationMethod.ReadWrite.All`
-  - `User.EnableDisableAccount.All`
-  - `User-PasswordProfile.ReadWrite.All`
-  - `User-Phone.ReadWrite.All`
-  - **Entra ID Role assignment:**
-  - Assign the **Exchange Recipient Administrator** role to the App Registration
+- **Exchange Online app-only access:**
+  - Configure app-only authentication as described in Microsoft’s documentation (application access policy as needed for scoping).
+- **Entra ID Role assignment:**
+  - Assign the **Exchange Recipient Administrator** (or appropriate Exchange administrative) role to the App Registration.
 - **Certificate:**
-  - Upload the public key file (.cer) in Entra ID
+  - Upload the public key file (.cer) in Entra ID.
   - Provide the certificate as a Base64 string in HelloID. For instructions on creating the certificate and obtaining the base64 string, refer to our forum post: [Setting up a certificate for Microsoft Graph API in HelloID connectors](https://forum.helloid.com/forum/helloid-provisioning/5338-instruction-setting-up-a-certificate-for-microsoft-graph-api-in-helloid-connectors#post5338)
 
 ### Connection settings
 
-The following user-defined variables are used by the connector.
+The following user-defined variables are used by the connector and referenced by the script:
 
-| Setting     | Description                              | Mandatory |
-| ----------- | ---------------------------------------- | --------- |
-| EntraTenantId | Entra tenant ID                       | Yes       |
-| EntraAppId    | Entra application (client) ID         | Yes       |
-| EntraCertificateBase64String | Entra Certificate string      | Yes       |
-| EntraCertificatePassword | Entra Certificate password      | Yes       |
+| Setting                        | Description                                               | Mandatory |
+| ------------------------------ | --------------------------------------------------------- | --------- |
+| EntraIdOrganization            | Entra tenant organization (e.g., contoso.onmicrosoft.com) | Yes       |
+| EntraIdAppId                   | Entra application (client) ID                             | Yes       |
+| EntraIdCertificateBase64String | Base64-encoded certificate string                         | Yes       |
+| EntraIdCertificatePassword     | Certificate password                                      | Yes       |
 
 ## Remarks
 
 - Group search:
   - When no search value or `*` is provided, all distribution groups are retrieved.
-- Permission management scope:
-  - The form manages user assignments for `Full Access`, `Send As`, and `Send on Behalf`.
-- Dual list behavior:
-  - Left list shows available users; right list shows current assignments for the selected group and permission.
+- Update scope:
+  - The form updates `Name`, `Alias`, and `PrimarySmtpAddress` of the selected distribution group.
+- Validation step:
+  - Input is validated against current group data to prevent conflicts before submission.
 - Performance notes:
-  - Retrieving groups typically takes ~10 seconds; permissions ~30 seconds.
+  - Retrieving groups typically takes ~10 seconds; validation typically takes ~10 seconds.
 - Duplicate import:
   - When importing a duplicate form, resource names can be suffixed automatically, as configured in the script.
 
@@ -74,23 +69,20 @@ The following user-defined variables are used by the connector.
 
 This connector uses Exchange Online PowerShell (EXO) cmdlets via the `ExchangeOnlineManagement` module:
 
-| Cmdlet/Operation              | Description                                            |
-| ---------------------------- | ------------------------------------------------------ |
-| Connect-ExchangeOnline       | Connect to Exchange Online using app-only certificate |
-| Get-EXORecipient             | Search and retrieve distribution groups               |
-| Get-DistributionGroupMember  | Retrieve current members of a distribution group      |
-| Add-DistributionGroupMember  | Add a user as a member of a distribution group        |
-| Remove-DistributionGroupMember | Remove a user from a distribution group             |
-| Disconnect-ExchangeOnline    | Disconnect the Exchange Online session                |
+| Cmdlet/Operation           | Description                                             |
+| -------------------------- | ------------------------------------------------------- |
+| Connect-ExchangeOnline     | Connect to Exchange Online using app-only certificate  |
+| Get-DistributionGroup      | Search and retrieve distribution groups                |
+| Set-DistributionGroup      | Update distribution group properties                   |
+| Disconnect-ExchangeOnline  | Disconnect the Exchange Online session                 |
 
 ### API documentation
 
 - Exchange Online PowerShell overview: https://learn.microsoft.com/powershell/exchange/exchange-online-powershell
 - Connect to Exchange Online: https://learn.microsoft.com/powershell/module/exchange/connect-exchangeonline
-- Get-EXORecipient: https://learn.microsoft.com/powershell/module/exchange/get-exorecipient
-- Get-DistributionGroupMember: https://learn.microsoft.com/powershell/module/exchange/get-distributiongroupmember
-- Add-DistributionGroupMember: https://learn.microsoft.com/powershell/module/exchange/add-distributiongroupmember
-- Remove-DistributionGroupMember: https://learn.microsoft.com/powershell/module/exchange/remove-distributiongroupmember
+- Get-DistributionGroup: https://learn.microsoft.com/powershell/module/exchange/get-distributiongroup
+- Set-DistributionGroup: https://learn.microsoft.com/powershell/module/exchange/set-distributiongroup
+- Disconnect-ExchangeOnline: https://learn.microsoft.com/powershell/module/exchange/disconnect-exchangeonline
 
 ## Getting help
 > :bulb: **Tip:**  
