@@ -7,10 +7,10 @@
 ## Description
 HelloID-Conn-SA-Full-ExchangeOnline-DistributionGroupUpdate is a template designed for use with HelloID Service Automation (SA) Delegated Forms. It can be imported into HelloID and customized according to your requirements.
 
-With this delegated form you can search for a Distribution Group and update its core properties in Exchange Online. The form implements the flow defined in the provided script (All-in-one setup/createform.ps1):
- 1. Search and select the distribution group (wildcard search supported)
+With this delegated form you can search for a distribution group or a mail-enabled security group and update its core properties in Exchange Online. The form implements the flow defined in the provided script (All-in-one setup/createform.ps1):
+ 1. Search and select the distribution group or mail-enabled security group (wildcard search supported)
  2. Edit the group’s `Name`, `Alias`, and `PrimarySmtpAddress`
- 3. Validate the changes against Exchange Online
+ 3. Validate the changes against Entra ID (for better performance)
  4. Submit the form to apply the updates in Exchange Online
 
 Notes shown in the form:

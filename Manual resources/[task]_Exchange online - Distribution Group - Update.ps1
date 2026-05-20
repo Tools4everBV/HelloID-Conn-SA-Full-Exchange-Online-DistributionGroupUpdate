@@ -6,13 +6,23 @@ $InformationPreference = "Continue"
 $WarningPreference = "Continue"
 
 # variables configured in form:
-$exchangeDGGUID = $form.distributionGroup.id
-$name = $form.name
+$exchangeDGGUID = $form.gridGroup.Guid
+$currentAddresses = $form.gridGroup.EmailAddresses
+$displayName = $form.displayName
 $alias = $form.alias
-$primarySmtpAddress = $form.primarySmtpAddress
+$mailboxMailPrefix = $form.mailPrefix
+$mailboxMailDomain = $form.mailDomain.id
+$blnSetAsPrimaryEmail = if ([string]::IsNullOrWhiteSpace($form.blnSetAsPrimaryEmail)) { $false } else { [System.Convert]::ToBoolean($form.blnSetAsPrimaryEmail) }
+# Build proxy address with appropriate prefix based on whether it should be primary
+if ($blnSetAsPrimaryEmail) {
+    $mailboxProxyAddress = "SMTP:$($mailboxMailPrefix)@$($mailboxMailDomain)"
+}
+else {
+    $mailboxProxyAddress = "smtp:$($mailboxMailPrefix)@$($mailboxMailDomain)"
+}
 
 # PowerShell commands to import
-$commands = @("Get-DistributionGroup", "Set-DistributionGroup")
+$commands = @("Set-DistributionGroup")
 #endregion init
 
 #region functions
@@ -82,48 +92,48 @@ catch {
 
 
 #region get distribution group
-try{
-    $GetDistributionGroupParams = @{
-        Identity    = $exchangeDGGUID
-        ErrorAction = 'Stop'
-    }
-
-    $distributionGroup = Get-DistributionGroup @GetDistributionGroupParams
-    $currentAddresses = $distributionGroup.EmailAddresses
+try {
+    # Get current email addresses and prepare new email address list, while keeping existing proxy addresses (except the current address if already present)
     $proxyAddresses = @()
+    
+    # Extract the email address without prefix for comparison
+    $emailAddressOnly = $mailboxProxyAddress -replace '^(smtp|SMTP):', ''
+    
     foreach ($address in $currentAddresses) {
-        if ($address.StartsWith('SMTP:')) {
+        # If setting as primary, convert any existing primary SMTP to secondary
+        if ($blnSetAsPrimaryEmail -and $address.StartsWith('SMTP:')) {
             $address = $address -replace 'SMTP:', 'smtp:'
         }
-        if ($address -ne "smtp:" + $primarySmtpAddress) {
+        # Remove the address if it already exists (to avoid duplicates)
+        if ($address -ne "smtp:$emailAddressOnly" -and $address -ne "SMTP:$emailAddressOnly") {
             $proxyAddresses += $address
         }
     }
-
-    # Set new primary SMTP as uppercase 'SMTP:' and keep other proxies as lowercase 'smtp:'
-    $proxyAddresses += 'SMTP:' + $primarySmtpAddress
+    # Add the new proxy address
+    $proxyAddresses += $mailboxProxyAddress
 
     #region update distribution group
     $actionMessage = "updating distribution group"
 
     $UpdateDistributionGroupParams = @{
-        Identity       = $exchangeDGGUID
-        DisplayName    = $name
-        Name           = $name
-        EmailAddresses = $proxyAddresses
-        Alias          = $alias
-        ErrorAction    = 'Stop'
+        Identity                        = $exchangeDGGUID
+        DisplayName                     = $displayName
+        Name                            = $displayName
+        EmailAddresses                  = $proxyAddresses
+        Alias                           = $alias
+        BypassSecurityGroupManagerCheck = $true    
+        ErrorAction                     = 'Stop'
     }
 
     Set-DistributionGroup @UpdateDistributionGroupParams
  
-    Write-Information  "Distribution Group [$name] updated successfully" 
+    Write-Information  "Distribution Group [$displayName] updated successfully" 
     $Log = @{
         Action            = "UpdateResource" # optional. ENUM (undefined = default) 
         System            = "Exchange Online" # optional (free format text) 
-        Message           = "Distribution Group [$name] updated successfully"  # required (free format text) 
+        Message           = "Distribution Group [$displayName] updated successfully"  # required (free format text) 
         IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) 
-        TargetDisplayName = $name # optional (free format text) 
+        TargetDisplayName = $displayName # optional (free format text) 
         TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) 
     }
     #send result back  
@@ -139,7 +149,7 @@ catch {
         $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
         $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
     }
-   $Log = @{
+    $Log = @{
         Action            = "UpdateResource" # optional. ENUM (undefined = default) 
         System            = "Exchange Online" # optional (free format text) 
         Message           = "Error $actionMessage for Exchange Online distribution group [$name]" # required (free format text) 
