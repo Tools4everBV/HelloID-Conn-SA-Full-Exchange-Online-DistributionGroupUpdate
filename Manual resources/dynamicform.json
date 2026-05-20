@@ -1,0 +1,197 @@
+[
+  {
+    "label": "Search Group",
+    "fields": [
+      {
+        "templateOptions": {
+          "title": "Retrieving this information from Exchange Online takes an average of +/- 10 seconds.",
+          "titleField": "",
+          "bannerType": "Info",
+          "useBody": true
+        },
+        "type": "textbanner",
+        "summaryVisibility": "Show",
+        "body": "Please wait so we can retreive the input.",
+        "requiresTemplateOptions": false,
+        "requiresKey": false,
+        "requiresDataSource": false
+      },
+      {
+        "key": "searchfield",
+        "templateOptions": {
+          "label": "Search",
+          "required": true
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "distributionGroup",
+        "templateOptions": {
+          "label": "Distribution groups",
+          "required": true,
+          "grid": {
+            "columns": [
+              {
+                "headerName": "Name",
+                "field": "name"
+              },
+              {
+                "headerName": "Alias",
+                "field": "Alias"
+              },
+              {
+                "headerName": "Primary Smtp Address",
+                "field": "primarySmtpAddress"
+              },
+              {
+                "headerName": "Id",
+                "field": "id"
+              }
+            ],
+            "height": 300,
+            "rowSelection": "single"
+          },
+          "dataSourceConfig": {
+            "dataSourceGuid": "$dataSourceGuid_0",
+            "input": {
+              "propertyInputs": [
+                {
+                  "propertyName": "searchValue",
+                  "otherFieldValue": {
+                    "otherFieldKey": "searchfield"
+                  }
+                }
+              ]
+            }
+          },
+          "useFilter": true,
+          "useDefault": false,
+          "searchPlaceHolder": "Search this data",
+          "allowCsvDownload": true
+        },
+        "type": "grid",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": true
+      }
+    ]
+  },
+  {
+    "label": "Edit Group",
+    "fields": [
+      {
+        "templateOptions": {
+          "title": "Retrieving this information from Exchange Online takes an average of +/- 10 seconds.",
+          "titleField": "",
+          "bannerType": "Info",
+          "useBody": true
+        },
+        "type": "textbanner",
+        "summaryVisibility": "Show",
+        "body": "Please wait so we can validate the input.",
+        "requiresTemplateOptions": false,
+        "requiresKey": false,
+        "requiresDataSource": false
+      },
+      {
+        "key": "name",
+        "templateOptions": {
+          "label": "name",
+          "placeholder": "",
+          "required": true,
+          "minLength": 2,
+          "useDependOn": true,
+          "dependOn": "distributionGroup",
+          "dependOnProperty": "name"
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "alias",
+        "templateOptions": {
+          "label": "Alias",
+          "useDependOn": true,
+          "dependOn": "distributionGroup",
+          "dependOnProperty": "Alias",
+          "required": true
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "primarySmtpAddress",
+        "templateOptions": {
+          "label": "PrimarySmtpAddress",
+          "useDependOn": true,
+          "dependOn": "distributionGroup",
+          "dependOnProperty": "primarySmtpAddress",
+          "required": true
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      },
+      {
+        "key": "Validation",
+        "templateOptions": {
+          "label": "Validate",
+          "readonly": true,
+          "useDataSource": true,
+          "pattern": "^Valid.*",
+          "dataSourceConfig": {
+            "dataSourceGuid": "$dataSourceGuid_1",
+            "input": {
+              "propertyInputs": [
+                {
+                  "propertyName": "Name",
+                  "otherFieldValue": {
+                    "otherFieldKey": "name"
+                  }
+                },
+                {
+                  "propertyName": "PrimarySmtpAddress",
+                  "otherFieldValue": {
+                    "otherFieldKey": "primarySmtpAddress"
+                  }
+                },
+                {
+                  "propertyName": "Alias",
+                  "otherFieldValue": {
+                    "otherFieldKey": "alias"
+                  }
+                },
+                {
+                  "propertyName": "SelectedSM",
+                  "otherFieldValue": {
+                    "otherFieldKey": "searchfield"
+                  }
+                }
+              ]
+            }
+          },
+          "displayField": "text",
+          "required": true
+        },
+        "type": "input",
+        "summaryVisibility": "Show",
+        "requiresTemplateOptions": true,
+        "requiresKey": true,
+        "requiresDataSource": false
+      }
+    ]
+  }
+]
