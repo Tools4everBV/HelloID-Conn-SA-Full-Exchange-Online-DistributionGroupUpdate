@@ -7,7 +7,7 @@ $portalUrl = "https://CUSTOMER.helloid.com"
 $apiKey = "API_KEY"
 $apiSecret = "API_SECRET"
 $delegatedFormAccessGroupNames = @("") #Only unique names are supported. Groups must exist!
-$delegatedFormCategories = @("Exchange Online") #Only unique names are supported. Categories will be created if not exists
+$delegatedFormCategories = @("Testing fase","Exchange Online") #Only unique names are supported. Categories will be created if not exists
 $script:debugLogging = $false #Default value: $false. If $true, the HelloID resource GUIDs will be shown in the logging
 $script:duplicateForm = $false #Default value: $false. If $true, the HelloID resource names will be changed to import a duplicate Form
 $script:duplicateFormSuffix = "_tmp" #the suffix will be added to all HelloID resource names to generate a duplicate form with different resource names
@@ -20,36 +20,41 @@ $globalHelloIDVariables = [System.Collections.Generic.List[object]]@();
 $tmpName = @'
 EntraIdCertificatePassword
 '@ 
-$tmpValue = @'
+$tmpValue = "" 
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "True"});
 
-'@
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
-
-#Global variable #2 >> EntraIdAppId
-$tmpName = @'
-EntraIdAppId
-'@ 
-$tmpValue = @'
-
-'@
-$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
-
-#Global variable #3 >> EntraIdOrganization
+#Global variable #2 >> EntraIdOrganization
 $tmpName = @'
 EntraIdOrganization
 '@ 
 $tmpValue = @'
+EbertHERAeurope.onmicrosoft.com
+'@ 
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
-'@
+#Global variable #3 >> EntraIdAppId
+$tmpName = @'
+EntraIdAppId
+'@ 
+$tmpValue = @'
+28294597-b9ed-4983-8cbf-cba6698d567c
+'@ 
 $globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
 #Global variable #4 >> EntraIdCertificateBase64String
 $tmpName = @'
 EntraIdCertificateBase64String
 '@ 
-$tmpValue = @'
+$tmpValue = "" 
+$globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "True"});
 
-'@
+#Global variable #5 >> EntraIdTenantId
+$tmpName = @'
+EntraIdTenantId
+'@ 
+$tmpValue = @'
+74b16c9e-fb6f-4c09-9584-24ed7c7a780d
+'@ 
 $globalHelloIDVariables.Add([PSCustomObject]@{name = $tmpName; value = $tmpValue; secret = "False"});
 
 
@@ -350,38 +355,1244 @@ foreach ($item in $globalHelloIDVariables) {
 
 
 <# Begin: HelloID Data sources #>
-<# Begin: DataSource "Exchange-online-distribution-group-update | Generate-table-update" #>
+<# Begin: DataSource "exchange-online-distribution-group-update | EntraID-Check-EmailAddress-Unique" #>
 $tmpPsScript = @'
+# variables configured in form
+$group = $datasource.selectedGroup
+$mailPrefix = $datasource.mailPrefix
+$mailDomain = $datasource.mailDomain.id
+$PrimarySmtpAddress = "$mailPrefix@$mailDomain"
+
+# Build filter - Graph API uses $filter with OData syntax
+# Check for distribution groups or mail-enabled security groups matching the email/mailNickname
+# Distribution groups: mailEnabled=true, securityEnabled=false
+# Mail-enabled security groups: mailEnabled=true, securityEnabled=true
+$filter = "`$filter=mailEnabled eq true and (mailNickname eq '$mailPrefix' or mail eq '$PrimarySmtpAddress' or proxyAddresses/any(x:x eq 'smtp:$PrimarySmtpAddress') or proxyAddresses/any(x:x eq 'SMTP:$PrimarySmtpAddress'))"
+
+# Global variables
+# Outcommented as these are set from Global Variables
+# $EntraIdTenantId = ""
+# $EntraIdAppId = ""
+# $EntraIdCertificateBase64String = ""
+# $EntraIdCertificatePassword = ""
+
+# Fixed values
+# Properties to select - Select only needed properties to limit memory usage and speed up processing
+$propertiesToSelect = @(
+    "id",
+    "displayName",
+    "mail",
+    "mailNickname",
+    "groupTypes",
+    "mailEnabled",
+    "securityEnabled"
+)
+
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
+# Set debug logging
 $VerbosePreference = "SilentlyContinue"
 $InformationPreference = "Continue"
 $WarningPreference = "Continue"
 
-# variables configured in form:
-$GroupType = "Distribution Group" # "Mail-enabled Security Group" or "Distribution Group"
-$searchValue = $datasource.searchValue
-$searchQuery = "*$searchValue*"
-
-# PowerShell commands to import
-$commands = @("Get-DistributionGroup")
-#endregion init
-function Get-MSEntraCertificate {
+#region functions
+function Resolve-MicrosoftGraphAPIError {
     [CmdletBinding()]
-    param()
+    param (
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
+    )
+    process {
+        $httpErrorObj = [PSCustomObject]@{
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json -ErrorAction Stop)
+            if ($errorDetailsObject.error_description) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.error_description
+            }
+            elseif ($errorDetailsObject.error.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.code): $($errorDetailsObject.error.message)"
+            }
+            elseif ($errorDetailsObject.error.details.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.details.code): $($errorDetailsObject.error.details.message)"
+            }
+            else {
+                $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+            }
+        }
+        catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+        }
+        Write-Output $httpErrorObj
+    }
+}
+
+function Get-MSEntraAccessToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        $Certificate,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $AppId,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $TenantId
+    )
     try {
-        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)
-        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
-        Write-Output $certificate
+        # Get the DER encoded bytes of the certificate
+        $derBytes = $Certificate.RawData
+
+        # Compute the SHA-256 hash of the DER encoded bytes
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $sha256.ComputeHash($derBytes)
+        $base64Thumbprint = [System.Convert]::ToBase64String($hashBytes).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Create a JWT (JSON Web Token) header
+        $header = @{
+            'alg'      = 'RS256'
+            'typ'      = 'JWT'
+            'x5t#S256' = $base64Thumbprint
+        } | ConvertTo-Json
+        $base64Header = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($header))
+
+        # Calculate the Unix timestamp (seconds since 1970-01-01T00:00:00Z) for 'exp', 'nbf' and 'iat'
+        $currentUnixTimestamp = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime()).TotalSeconds)
+
+        # Create a JWT payload
+        $payload = [Ordered]@{
+            'iss' = "$($AppId)"
+            'sub' = "$($AppId)"
+            'aud' = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            'exp' = ($currentUnixTimestamp + 3600) # Expires in 1 hour
+            'nbf' = ($currentUnixTimestamp - 300) # Not before 5 minutes ago
+            'iat' = $currentUnixTimestamp
+            'jti' = [Guid]::NewGuid().ToString()
+        } | ConvertTo-Json
+        $base64Payload = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload)).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Extract the private key from the certificate
+        $rsaPrivate = $Certificate.PrivateKey
+        $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new()
+        $rsa.ImportParameters($rsaPrivate.ExportParameters($true))
+
+        # Sign the JWT
+        $signatureInput = "$base64Header.$base64Payload"
+        $signature = $rsa.SignData([Text.Encoding]::UTF8.GetBytes($signatureInput), 'SHA256')
+        $base64Signature = [System.Convert]::ToBase64String($signature).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Ensure the certificate has a private key
+        if (-not $Certificate.HasPrivateKey -or -not $Certificate.PrivateKey) {
+            throw "The certificate does not have a private key."
+        }
+
+        # Create the JWT token
+        $jwtToken = "$($base64Header).$($base64Payload).$($base64Signature)"
+
+        $createEntraAccessTokenBody = @{
+            grant_type            = 'client_credentials'
+            client_id             = $AppId
+            client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+            client_assertion      = $jwtToken
+            resource              = 'https://graph.microsoft.com'
+        }
+
+        $createEntraAccessTokenSplatParams = @{
+            Uri         = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            Body        = $createEntraAccessTokenBody
+            Method      = 'POST'
+            ContentType = 'application/x-www-form-urlencoded'
+            Verbose     = $false
+            ErrorAction = 'Stop'
+        }
+
+        $createEntraAccessTokenResponse = Invoke-RestMethod @createEntraAccessTokenSplatParams
+        Write-Output $createEntraAccessTokenResponse.access_token
     }
     catch {
         $PSCmdlet.ThrowTerminatingError($_)
     }
 }
 
-#region Import module & connect
-try {    
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+#endregion functions
+
+try {
+    # Convert base64 certificate string to certificate object
+    $actionMessage = "converting base64 certificate string to certificate object"
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
+
+    # Create access token
+    $actionMessage = "creating access token"
+    $entraToken = Get-MSEntraAccessToken -Certificate $certificate -AppId $EntraIdAppId -TenantId $EntraIdTenantId
+
+    # Create headers
+    $actionMessage = "creating headers"
+    $headers = @{
+        "Authorization"    = "Bearer $($entraToken)"
+        "Accept"           = "application/json"
+        "Content-Type"     = "application/json"
+        "ConsistencyLevel" = "eventual" # Needed to filter on specific attributes (https://docs.microsoft.com/en-us/graph/aad-advanced-queries)
+    }
+
+    # Get Microsoft Entra ID Groups (Distribution Groups and Mail-enabled Security Groups)
+    # Docs: https://learn.microsoft.com/en-us/graph/api/group-list?view=graph-rest-1.0&tabs=http
+    $actionMessage = "querying Microsoft Entra ID Groups (Distribution Groups and Mail-enabled Security Groups) matching filter [$filter]"
+
+    $getMicrosoftEntraIDGroupsSplatParams = @{
+        Uri         = "https://graph.microsoft.com/v1.0/groups?$filter&`$select=$($propertiesToSelect -join ',')&`$top=999&`$count=true"
+        Headers     = $headers
+        Method      = "GET"
+        Verbose     = $false
+        ErrorAction = "Stop"
+    }
+    
+    $getMicrosoftEntraIDGroupsResponse = $null
+    $getMicrosoftEntraIDGroupsResponse = Invoke-RestMethod @getMicrosoftEntraIDGroupsSplatParams
+
+    # Select only specified properties to limit memory usage
+    $microsoftEntraIDGroups = $null
+    $microsoftEntraIDGroups = $getMicrosoftEntraIDGroupsResponse.Value | Select-Object $propertiesToSelect
+    Write-Information "Queried Microsoft Entra ID Groups matching filter [$filter]. Result count: $(@($microsoftEntraIDGroups).Count)"
+
+    # Check if value is unique and free
+    if (($microsoftEntraIDGroups | Measure-Object).Count -gt 0) {
+        # Check if value is in use by selected group
+        if ($group.ExternalDirectoryObjectId -in $microsoftEntraIDGroups.id) {
+            Write-Warning "Email address in use by the selected group."  
+
+            # Send results to HelloID
+            $actionMessage = "sending results to HelloID"
+            Write-Output "Valid: Email address in use by the selected group."
+        }
+        else {
+            Write-Warning "Email address is not unique. In use by group with displayName [$($microsoftEntraIDGroups.displayName)], mail [$($microsoftEntraIDGroups.mail)] and alias (mailNickName) [$($microsoftEntraIDGroups.mailNickName)]."
+
+            # Send results to HelloID
+            $actionMessage = "sending results to HelloID"
+            Write-Output "Invalid: Email address is not unique. In use by group with displayName [$($microsoftEntraIDGroups.displayName)], mail [$($microsoftEntraIDGroups.mail)] and alias (mailNickName) [$($microsoftEntraIDGroups.mailNickName)]."
+        }
+    }
+    else {
+        Write-Information "Email address is unique and free to use."
+
+        # Send results to HelloID
+        $actionMessage = "sending results to HelloID"
+        Write-Output "Valid: Email address is unique and free to use." 
+    }
+}
+catch {
+    $ex = $PSItem
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorObj = Resolve-MicrosoftGraphAPIError -ErrorObject $ex
+        $auditMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+        $warningMessage = "Error at Line [$($errorObj.ScriptLineNumber)]: $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+    }
+    else {
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+    }
+    Write-Warning $warningMessage
+    Write-Error $auditMessage
+}
+'@ 
+$tmpModel = @'
+[{"key":"output","type":0}]
+'@ 
+$tmpInput = @'
+[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"mailPrefix","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"mailDomain","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"selectedGroup","type":0,"options":1}]
+'@ 
+$dataSourceGuid_3 = [PSCustomObject]@{} 
+$dataSourceGuid_3_Name = @'
+exchange-online-distribution-group-update | EntraID-Check-EmailAddress-Unique
+'@ 
+Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_3_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "True" -returnObject ([Ref]$dataSourceGuid_3) 
+<# End: DataSource "exchange-online-distribution-group-update | EntraID-Check-EmailAddress-Unique" #>
+
+<# Begin: DataSource "exchange-online-distribution-group-update | EntraID-Check-DisplayName-Unique" #>
+$tmpPsScript = @'
+# variables configured in form
+$group = $datasource.selectedGroup
+$displayName = $datasource.displayName
+
+# Build filter - Graph API uses $filter with OData syntax
+# Check for groups matching the displayName
+$filter = "`$filter=displayName eq '$displayName' and mailEnabled eq true"
+
+# Global variables
+# Outcommented as these are set from Global Variables
+# $EntraIdTenantId = ""
+# $EntraIdAppId = ""
+# $EntraIdCertificateBase64String = ""
+# $EntraIdCertificatePassword = ""
+
+# Fixed values
+# Properties to select - Select only needed properties to limit memory usage and speed up processing
+$propertiesToSelect = @(
+    "id",
+    "displayName",
+    "mail",
+    "mailNickname",
+    "groupTypes",
+    "mailEnabled",
+    "securityEnabled"
+)
+
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+
+# Set debug logging
+$VerbosePreference = "SilentlyContinue"
+$InformationPreference = "Continue"
+$WarningPreference = "Continue"
+
+#region functions
+function Resolve-MicrosoftGraphAPIError {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
+    )
+    process {
+        $httpErrorObj = [PSCustomObject]@{
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json -ErrorAction Stop)
+            if ($errorDetailsObject.error_description) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.error_description
+            }
+            elseif ($errorDetailsObject.error.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.code): $($errorDetailsObject.error.message)"
+            }
+            elseif ($errorDetailsObject.error.details.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.details.code): $($errorDetailsObject.error.details.message)"
+            }
+            else {
+                $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+            }
+        }
+        catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+        }
+        Write-Output $httpErrorObj
+    }
+}
+
+function Get-MSEntraAccessToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        $Certificate,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $AppId,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $TenantId
+    )
+    try {
+        # Get the DER encoded bytes of the certificate
+        $derBytes = $Certificate.RawData
+
+        # Compute the SHA-256 hash of the DER encoded bytes
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $sha256.ComputeHash($derBytes)
+        $base64Thumbprint = [System.Convert]::ToBase64String($hashBytes).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Create a JWT (JSON Web Token) header
+        $header = @{
+            'alg'      = 'RS256'
+            'typ'      = 'JWT'
+            'x5t#S256' = $base64Thumbprint
+        } | ConvertTo-Json
+        $base64Header = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($header))
+
+        # Calculate the Unix timestamp (seconds since 1970-01-01T00:00:00Z) for 'exp', 'nbf' and 'iat'
+        $currentUnixTimestamp = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime()).TotalSeconds)
+
+        # Create a JWT payload
+        $payload = [Ordered]@{
+            'iss' = "$($AppId)"
+            'sub' = "$($AppId)"
+            'aud' = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            'exp' = ($currentUnixTimestamp + 3600) # Expires in 1 hour
+            'nbf' = ($currentUnixTimestamp - 300) # Not before 5 minutes ago
+            'iat' = $currentUnixTimestamp
+            'jti' = [Guid]::NewGuid().ToString()
+        } | ConvertTo-Json
+        $base64Payload = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload)).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Extract the private key from the certificate
+        $rsaPrivate = $Certificate.PrivateKey
+        $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new()
+        $rsa.ImportParameters($rsaPrivate.ExportParameters($true))
+
+        # Sign the JWT
+        $signatureInput = "$base64Header.$base64Payload"
+        $signature = $rsa.SignData([Text.Encoding]::UTF8.GetBytes($signatureInput), 'SHA256')
+        $base64Signature = [System.Convert]::ToBase64String($signature).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Ensure the certificate has a private key
+        if (-not $Certificate.HasPrivateKey -or -not $Certificate.PrivateKey) {
+            throw "The certificate does not have a private key."
+        }
+
+        # Create the JWT token
+        $jwtToken = "$($base64Header).$($base64Payload).$($base64Signature)"
+
+        $createEntraAccessTokenBody = @{
+            grant_type            = 'client_credentials'
+            client_id             = $AppId
+            client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+            client_assertion      = $jwtToken
+            resource              = 'https://graph.microsoft.com'
+        }
+
+        $createEntraAccessTokenSplatParams = @{
+            Uri         = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            Body        = $createEntraAccessTokenBody
+            Method      = 'POST'
+            ContentType = 'application/x-www-form-urlencoded'
+            Verbose     = $false
+            ErrorAction = 'Stop'
+        }
+
+        $createEntraAccessTokenResponse = Invoke-RestMethod @createEntraAccessTokenSplatParams
+        Write-Output $createEntraAccessTokenResponse.access_token
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+#endregion functions
+
+try {
+    # Convert base64 certificate string to certificate object
+    $actionMessage = "converting base64 certificate string to certificate object"
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
+
+    # Create access token
+    $actionMessage = "creating access token"
+    $entraToken = Get-MSEntraAccessToken -Certificate $certificate -AppId $EntraIdAppId -TenantId $EntraIdTenantId
+
+    # Create headers
+    $actionMessage = "creating headers"
+    $headers = @{
+        "Authorization"    = "Bearer $($entraToken)"
+        "Accept"           = "application/json"
+        "Content-Type"     = "application/json"
+        "ConsistencyLevel" = "eventual" # Needed to filter on specific attributes (https://docs.microsoft.com/en-us/graph/aad-advanced-queries)
+    }
+
+    # Get Microsoft Entra ID Groups (Distribution Groups and Mail-enabled Security Groups)
+    # Docs: https://learn.microsoft.com/en-us/graph/api/group-list?view=graph-rest-1.0&tabs=http
+    $actionMessage = "querying Microsoft Entra ID Groups (Distribution Groups and Mail-enabled Security Groups) matching filter [$filter]"
+    
+    $getMicrosoftEntraIDGroupsSplatParams = @{
+        Uri         = "https://graph.microsoft.com/v1.0/groups?$filter&`$select=$($propertiesToSelect -join ',')&`$top=999&`$count=true"
+        Headers     = $headers
+        Method      = "GET"
+        Verbose     = $false
+        ErrorAction = "Stop"
+    }
+    
+    $getMicrosoftEntraIDGroupsResponse = $null
+    $getMicrosoftEntraIDGroupsResponse = Invoke-RestMethod @getMicrosoftEntraIDGroupsSplatParams
+
+    # Select only specified properties to limit memory usage
+    $microsoftEntraIDGroups = $null
+    $microsoftEntraIDGroups = $getMicrosoftEntraIDGroupsResponse.Value #| Select-Object $propertiesToSelect
+    Write-Information "Queried Microsoft Entra ID Groups matching filter [$filter]. Result count: $(@($microsoftEntraIDGroups).Count)"
+
+    # Check if value is unique and free
+    if (($microsoftEntraIDGroups | Measure-Object).Count -gt 0) {
+        # Check if value is in use by selected group
+        if ($group.ExternalDirectoryObjectId -in $microsoftEntraIDGroups.id) {
+            Write-Warning "Display name in use by the selected group."  
+
+            # Send results to HelloID
+            $actionMessage = "sending results to HelloID"
+            Write-Output "Valid: Display name in use by the selected group."
+        }
+        else {
+            Write-Warning "Display name is not unique. In use by group with displayName [$($microsoftEntraIDGroups.displayName)], mail [$($microsoftEntraIDGroups.mail)] and alias (mailNickName) [$($microsoftEntraIDGroups.mailNickName)]."
+
+            # Send results to HelloID
+            $actionMessage = "sending results to HelloID"
+            Write-Output "Invalid: Display name is not unique. In use by group with displayName [$($microsoftEntraIDGroups.displayName)], mail [$($microsoftEntraIDGroups.mail)] and alias (mailNickName) [$($microsoftEntraIDGroups.mailNickName)]."
+        }
+    }
+    else {
+        Write-Information "Display name is unique and free to use."
+
+        # Send results to HelloID
+        $actionMessage = "sending results to HelloID"
+        Write-Output "Valid: Display name is unique and free to use." 
+    }
+}
+catch {
+    $ex = $PSItem
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorObj = Resolve-MicrosoftGraphAPIError -ErrorObject $ex
+        $auditMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+        $warningMessage = "Error at Line [$($errorObj.ScriptLineNumber)]: $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+    }
+    else {
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+    }
+    Write-Warning $warningMessage
+    Write-Error $auditMessage
+}
+'@ 
+$tmpModel = @'
+[{"key":"output","type":0}]
+'@ 
+$tmpInput = @'
+[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"displayName","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"selectedGroup","type":0,"options":1}]
+'@ 
+$dataSourceGuid_1 = [PSCustomObject]@{} 
+$dataSourceGuid_1_Name = @'
+exchange-online-distribution-group-update | EntraID-Check-DisplayName-Unique
+'@ 
+Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_1_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "True" -returnObject ([Ref]$dataSourceGuid_1) 
+<# End: DataSource "exchange-online-distribution-group-update | EntraID-Check-DisplayName-Unique" #>
+
+<# Begin: DataSource "exchange-online-distribution-group-update | EntraID-Get-All-MailDomains" #>
+$tmpPsScript = @'
+# Variables configured in form
+$mailboxMailDomain = $datasource.selectedGroup.mailSuffix
+
+# Global variables
+# Outcommented as these are set from Global Variables
+# $EntraIdTenantId = ""
+# $EntraIdAppId = ""
+# $EntraIdCertificateBase64String = ""
+# $EntraIdCertificatePassword = ""
+
+# Fixed values
+# Properties to select - Select only needed properties to limit memory usage and speed up processing
+$propertiesToSelect = @(
+    "id"
+    , "isVerified"
+    , "supportedServices"
+)
+
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+
+# Set debug logging
+$VerbosePreference = "SilentlyContinue"
+$InformationPreference = "Continue"
+$WarningPreference = "Continue"
+
+#region functions
+function Resolve-MicrosoftGraphAPIError {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
+    )
+    process {
+        $httpErrorObj = [PSCustomObject]@{
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json -ErrorAction Stop)
+            if ($errorDetailsObject.error_description) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.error_description
+            }
+            elseif ($errorDetailsObject.error.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.code): $($errorDetailsObject.error.message)"
+            }
+            elseif ($errorDetailsObject.error.details.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.details.code): $($errorDetailsObject.error.details.message)"
+            }
+            else {
+                $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+            }
+        }
+        catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+        }
+        Write-Output $httpErrorObj
+    }
+}
+
+function Get-MSEntraAccessToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        $Certificate,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $AppId,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $TenantId
+    )
+    try {
+        # Get the DER encoded bytes of the certificate
+        $derBytes = $Certificate.RawData
+
+        # Compute the SHA-256 hash of the DER encoded bytes
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $sha256.ComputeHash($derBytes)
+        $base64Thumbprint = [System.Convert]::ToBase64String($hashBytes).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Create a JWT (JSON Web Token) header
+        $header = @{
+            'alg'      = 'RS256'
+            'typ'      = 'JWT'
+            'x5t#S256' = $base64Thumbprint
+        } | ConvertTo-Json
+        $base64Header = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($header))
+
+        # Calculate the Unix timestamp (seconds since 1970-01-01T00:00:00Z) for 'exp', 'nbf' and 'iat'
+        $currentUnixTimestamp = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime()).TotalSeconds)
+
+        # Create a JWT payload
+        $payload = [Ordered]@{
+            'iss' = "$($AppId)"
+            'sub' = "$($AppId)"
+            'aud' = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            'exp' = ($currentUnixTimestamp + 3600) # Expires in 1 hour
+            'nbf' = ($currentUnixTimestamp - 300) # Not before 5 minutes ago
+            'iat' = $currentUnixTimestamp
+            'jti' = [Guid]::NewGuid().ToString()
+        } | ConvertTo-Json
+        $base64Payload = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload)).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Extract the private key from the certificate
+        $rsaPrivate = $Certificate.PrivateKey
+        $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new()
+        $rsa.ImportParameters($rsaPrivate.ExportParameters($true))
+
+        # Sign the JWT
+        $signatureInput = "$base64Header.$base64Payload"
+        $signature = $rsa.SignData([Text.Encoding]::UTF8.GetBytes($signatureInput), 'SHA256')
+        $base64Signature = [System.Convert]::ToBase64String($signature).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Ensure the certificate has a private key
+        if (-not $Certificate.HasPrivateKey -or -not $Certificate.PrivateKey) {
+            throw "The certificate does not have a private key."
+        }
+
+        # Create the JWT token
+        $jwtToken = "$($base64Header).$($base64Payload).$($base64Signature)"
+
+        $createEntraAccessTokenBody = @{
+            grant_type            = 'client_credentials'
+            client_id             = $AppId
+            client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+            client_assertion      = $jwtToken
+            resource              = 'https://graph.microsoft.com'
+        }
+
+        $createEntraAccessTokenSplatParams = @{
+            Uri         = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            Body        = $createEntraAccessTokenBody
+            Method      = 'POST'
+            ContentType = 'application/x-www-form-urlencoded'
+            Verbose     = $false
+            ErrorAction = 'Stop'
+        }
+
+        $createEntraAccessTokenResponse = Invoke-RestMethod @createEntraAccessTokenSplatParams
+        Write-Output $createEntraAccessTokenResponse.access_token
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+#endregion functions
+
+try {
+    # Convert base64 certificate string to certificate object
+    $actionMessage = "converting base64 certificate string to certificate object"
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
+
+    # Create access token
+    $actionMessage = "creating access token"
+    $entraToken = Get-MSEntraAccessToken -Certificate $certificate -AppId $EntraIdAppId -TenantId $EntraIdTenantId
+
+    # Create headers
+    $actionMessage = "creating headers"
+    $headers = @{
+        "Authorization" = "Bearer $($entraToken)"
+        "Accept"        = "application/json"
+        "Content-Type"  = "application/json"
+    }
+
+    # Get Microsoft Entra ID Domains
+    # Docs: https://learn.microsoft.com/en-us/graph/api/domain-list?view=graph-rest-1.0&tabs=http
+    $actionMessage = "querying Microsoft Entra ID Domains"
+
+    $getMicrosoftEntraIDDomainsSplatParams = @{
+        Uri         = "https://graph.microsoft.com/v1.0/domains"#?`$select=$($propertiesToSelect -join ',')&`$top=999&`$count=true"#?$filter"
+        Headers     = $headers
+        Method      = "GET"
+        Verbose     = $false
+        ErrorAction = "Stop"
+    }
+    $getMicrosoftEntraIDDomainsResponse = $null
+    $getMicrosoftEntraIDDomainsResponse = Invoke-RestMethod @getMicrosoftEntraIDDomainsSplatParams
+
+    # Select only specified properties to limit memory usage
+    $microsoftEntraIDDomains = $null
+    $microsoftEntraIDDomains = $getMicrosoftEntraIDDomainsResponse.Value | Select-Object $propertiesToSelect
+    Write-Information "Queried Microsoft Entra ID Domains. Result count: $(@($microsoftEntraIDDomains).Count)"
+
+    # Filter for verified domains only and where Email is supported - not support by Graph API filter query
+    $actionMessage = "filtering for verified domains only and where Email is supported"
+    $microsoftEntraIDDomains = $microsoftEntraIDDomains | Where-Object { $_.isVerified -eq $true -and $_.supportedServices -like '*Email*' }
+    Write-Information "Filter for verified domains only and where Email is supported. Result count: $(@($microsoftEntraIDDomains).Count)"
+
+    # Send results to HelloID
+    $actionMessage = "sending results to HelloID"
+
+    # Make sure to return the domain matching the mailbox domain first, to ensure HelloID autoselect selects the current domain
+    $microsoftEntraIDDomains | Where-Object { $_.id -eq $mailboxMailDomain } | Sort-Object -Property id | ForEach-Object {
+        Write-Output $_
+    }
+    # Then return the rest of the domains
+    $microsoftEntraIDDomains | Where-Object { $_.id -ne $mailboxMailDomain } | Sort-Object -Property id | ForEach-Object {
+        Write-Output $_
+    }
+}
+catch {
+    $ex = $PSItem
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorObj = Resolve-MicrosoftGraphAPIError -ErrorObject $ex
+        $auditMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+        $warningMessage = "Error at Line [$($errorObj.ScriptLineNumber)]: $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+    }
+    else {
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+    }
+    Write-Warning $warningMessage
+    Write-Error $auditMessage
+}
+
+'@ 
+$tmpModel = @'
+[{"key":"id","type":0},{"key":"isVerified","type":0},{"key":"supportedServices","type":0}]
+'@ 
+$tmpInput = @'
+[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"selectedGroup","type":0,"options":1}]
+'@ 
+$dataSourceGuid_2 = [PSCustomObject]@{} 
+$dataSourceGuid_2_Name = @'
+exchange-online-distribution-group-update | EntraID-Get-All-MailDomains
+'@ 
+Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_2_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "True" -returnObject ([Ref]$dataSourceGuid_2) 
+<# End: DataSource "exchange-online-distribution-group-update | EntraID-Get-All-MailDomains" #>
+
+<# Begin: DataSource "exchange-online-distribution-group-update | EntraID-Check-Alias-Unique" #>
+$tmpPsScript = @'
+# variables configured in form
+$group = $datasource.selectedGroup
+$alias = $datasource.alias
+$mailDomain = $datasource.mailDomain.id
+$PrimarySmtpAddress = "$alias@$mailDomain"
+
+# Build filter - Graph API uses $filter with OData syntax
+# Check for distribution groups or mail-enabled security groups matching the alias/email
+# Distribution groups: mailEnabled=true, securityEnabled=false
+# Mail-enabled security groups: mailEnabled=true, securityEnabled=true
+$filter = "`$filter=mailEnabled eq true and (mailNickname eq '$alias' or mail eq '$PrimarySmtpAddress' or proxyAddresses/any(x:x eq 'smtp:$PrimarySmtpAddress') or proxyAddresses/any(x:x eq 'SMTP:$PrimarySmtpAddress'))"
+
+# Global variables
+# Outcommented as these are set from Global Variables
+# $EntraIdTenantId = ""
+# $EntraIdAppId = ""
+# $EntraIdCertificateBase64String = ""
+# $EntraIdCertificatePassword = ""
+
+# Fixed values
+# Properties to select - Select only needed properties to limit memory usage and speed up processing
+$propertiesToSelect = @(
+    "id",
+    "displayName",
+    "mail",
+    "mailNickname",
+    "groupTypes",
+    "mailEnabled",
+    "securityEnabled"
+)
+
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+
+# Set debug logging
+$VerbosePreference = "SilentlyContinue"
+$InformationPreference = "Continue"
+$WarningPreference = "Continue"
+
+#region functions
+function Resolve-MicrosoftGraphAPIError {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
+    )
+    process {
+        $httpErrorObj = [PSCustomObject]@{
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
+        }
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json -ErrorAction Stop)
+            if ($errorDetailsObject.error_description) {
+                $httpErrorObj.FriendlyMessage = $errorDetailsObject.error_description
+            }
+            elseif ($errorDetailsObject.error.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.code): $($errorDetailsObject.error.message)"
+            }
+            elseif ($errorDetailsObject.error.details.message) {
+                $httpErrorObj.FriendlyMessage = "$($errorDetailsObject.error.details.code): $($errorDetailsObject.error.details.message)"
+            }
+            else {
+                $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+            }
+        }
+        catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
+        }
+        Write-Output $httpErrorObj
+    }
+}
+
+function Get-MSEntraAccessToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        $Certificate,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $AppId,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $TenantId
+    )
+    try {
+        # Get the DER encoded bytes of the certificate
+        $derBytes = $Certificate.RawData
+
+        # Compute the SHA-256 hash of the DER encoded bytes
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hashBytes = $sha256.ComputeHash($derBytes)
+        $base64Thumbprint = [System.Convert]::ToBase64String($hashBytes).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Create a JWT (JSON Web Token) header
+        $header = @{
+            'alg'      = 'RS256'
+            'typ'      = 'JWT'
+            'x5t#S256' = $base64Thumbprint
+        } | ConvertTo-Json
+        $base64Header = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($header))
+
+        # Calculate the Unix timestamp (seconds since 1970-01-01T00:00:00Z) for 'exp', 'nbf' and 'iat'
+        $currentUnixTimestamp = [math]::Round(((Get-Date).ToUniversalTime() - ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime()).TotalSeconds)
+
+        # Create a JWT payload
+        $payload = [Ordered]@{
+            'iss' = "$($AppId)"
+            'sub' = "$($AppId)"
+            'aud' = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            'exp' = ($currentUnixTimestamp + 3600) # Expires in 1 hour
+            'nbf' = ($currentUnixTimestamp - 300) # Not before 5 minutes ago
+            'iat' = $currentUnixTimestamp
+            'jti' = [Guid]::NewGuid().ToString()
+        } | ConvertTo-Json
+        $base64Payload = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload)).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Extract the private key from the certificate
+        $rsaPrivate = $Certificate.PrivateKey
+        $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new()
+        $rsa.ImportParameters($rsaPrivate.ExportParameters($true))
+
+        # Sign the JWT
+        $signatureInput = "$base64Header.$base64Payload"
+        $signature = $rsa.SignData([Text.Encoding]::UTF8.GetBytes($signatureInput), 'SHA256')
+        $base64Signature = [System.Convert]::ToBase64String($signature).Replace('+', '-').Replace('/', '_').Replace('=', '')
+
+        # Ensure the certificate has a private key
+        if (-not $Certificate.HasPrivateKey -or -not $Certificate.PrivateKey) {
+            throw "The certificate does not have a private key."
+        }
+
+        # Create the JWT token
+        $jwtToken = "$($base64Header).$($base64Payload).$($base64Signature)"
+
+        $createEntraAccessTokenBody = @{
+            grant_type            = 'client_credentials'
+            client_id             = $AppId
+            client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+            client_assertion      = $jwtToken
+            resource              = 'https://graph.microsoft.com'
+        }
+
+        $createEntraAccessTokenSplatParams = @{
+            Uri         = "https://login.microsoftonline.com/$($TenantId)/oauth2/token"
+            Body        = $createEntraAccessTokenBody
+            Method      = 'POST'
+            ContentType = 'application/x-www-form-urlencoded'
+            Verbose     = $false
+            ErrorAction = 'Stop'
+        }
+
+        $createEntraAccessTokenResponse = Invoke-RestMethod @createEntraAccessTokenSplatParams
+        Write-Output $createEntraAccessTokenResponse.access_token
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+#endregion functions
+
+try {
+    # Convert base64 certificate string to certificate object
+    $actionMessage = "converting base64 certificate string to certificate object"
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
+
+    # Create access token
+    $actionMessage = "creating access token"
+    $entraToken = Get-MSEntraAccessToken -Certificate $certificate -AppId $EntraIdAppId -TenantId $EntraIdTenantId
+
+    # Create headers
+    $actionMessage = "creating headers"
+    $headers = @{
+        "Authorization"    = "Bearer $($entraToken)"
+        "Accept"           = "application/json"
+        "Content-Type"     = "application/json"
+        "ConsistencyLevel" = "eventual" # Needed to filter on specific attributes (https://docs.microsoft.com/en-us/graph/aad-advanced-queries)
+    }
+
+    # Get Microsoft Entra ID Groups (Distribution Groups and Mail-enabled Security Groups)
+    # Docs: https://learn.microsoft.com/en-us/graph/api/group-list?view=graph-rest-1.0&tabs=http
+    $actionMessage = "querying Microsoft Entra ID Groups (Distribution Groups and Mail-enabled Security Groups) matching filter [$filter]"
+
+    $getMicrosoftEntraIDGroupsSplatParams = @{
+        Uri         = "https://graph.microsoft.com/v1.0/groups?$filter&`$select=$($propertiesToSelect -join ',')&`$top=999&`$count=true"
+        Headers     = $headers
+        Method      = "GET"
+        Verbose     = $false
+        ErrorAction = "Stop"
+    }
+    
+    $getMicrosoftEntraIDGroupsResponse = $null
+    $getMicrosoftEntraIDGroupsResponse = Invoke-RestMethod @getMicrosoftEntraIDGroupsSplatParams
+
+    # Select only specified properties to limit memory usage
+    $microsoftEntraIDGroups = $null
+    $microsoftEntraIDGroups = $getMicrosoftEntraIDGroupsResponse.Value | Select-Object $propertiesToSelect
+    Write-Information "Queried Microsoft Entra ID Groups matching filter [$filter]. Result count: $(@($microsoftEntraIDGroups).Count)"
+
+    # Check if value is unique and free
+    if (($microsoftEntraIDGroups | Measure-Object).Count -gt 0) {
+        if ($group.ExternalDirectoryObjectId -in $microsoftEntraIDGroups.id) {
+            Write-Warning "Alias in use by the selected group."  
+
+            # Send results to HelloID
+            $actionMessage = "sending results to HelloID"
+            Write-Output "Valid: Alias in use by the selected group."
+        }
+        else {
+            Write-Warning "Alias is not unique. In use by group with displayName [$($microsoftEntraIDGroups.displayName)], mail [$($microsoftEntraIDGroups.mail)] and alias (mailNickName) [$($microsoftEntraIDGroups.mailNickName)]."
+
+            # Send results to HelloID
+            $actionMessage = "sending results to HelloID"
+            Write-Output "Invalid: Alias is not unique. In use by group with displayName [$($microsoftEntraIDGroups.displayName)], mail [$($microsoftEntraIDGroups.mail)] and alias (mailNickName) [$($microsoftEntraIDGroups.mailNickName)]."
+        }
+    }
+    else {
+        Write-Information "Alias is unique and free to use."
+
+        # Send results to HelloID
+        $actionMessage = "sending results to HelloID"
+        Write-Output "Valid: Alias is unique and free to use." 
+    }
+}
+catch {
+    $ex = $PSItem
+    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $errorObj = Resolve-MicrosoftGraphAPIError -ErrorObject $ex
+        $auditMessage = "Error $($actionMessage). Error: $($errorObj.FriendlyMessage)"
+        $warningMessage = "Error at Line [$($errorObj.ScriptLineNumber)]: $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+    }
+    else {
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Message)"
+        $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+    }
+    Write-Warning $warningMessage
+    Write-Error $auditMessage
+}
+'@ 
+$tmpModel = @'
+[{"key":"output","type":0}]
+'@ 
+$tmpInput = @'
+[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"alias","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"mailDomain","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"selectedGroup","type":0,"options":1}]
+'@ 
+$dataSourceGuid_4 = [PSCustomObject]@{} 
+$dataSourceGuid_4_Name = @'
+exchange-online-distribution-group-update | EntraID-Check-Alias-Unique
+'@ 
+Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_4_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "True" -returnObject ([Ref]$dataSourceGuid_4) 
+<# End: DataSource "exchange-online-distribution-group-update | EntraID-Check-Alias-Unique" #>
+
+<# Begin: DataSource "Exchange-online-distribution-group-update | EXO-Get-Distribution-Group" #>
+$tmpPsScript = @'
+# Variables configured in form
+$searchValue = $datasource.searchValue
+if ([string]::IsNullOrEmpty($searchValue) -or $searchValue -eq "*") {
+    $filter = "RecipientTypeDetails -eq 'MailUniversalDistributionGroup' -or RecipientTypeDetails -eq 'MailUniversalSecurityGroup'"
+}
+else {
+    $escapedSearchValue = $searchValue.Replace("'", "''")
+    $filter = "(Name -like '*$escapedSearchValue*' -or Alias -like '*$escapedSearchValue*' -or PrimarySmtpAddress -like '*$escapedSearchValue*') -and (RecipientTypeDetails -eq 'MailUniversalDistributionGroup' -or RecipientTypeDetails -eq 'MailUniversalSecurityGroup')"
+}
+
+# Global variables
+# Outcommented as these are set from Global Variables
+# $EntraIdTenantId = ""
+# $EntraIdAppId = ""
+# $EntraIdCertificateBase64String = ""
+# $EntraIdCertificatePassword = ""
+
+# Fixed values
+# Properties to select - Select only needed properties to limit memory usage and speed up processing
+$propertiesToSelect = @(
+    "Id"
+    , "Guid"
+    , "ExchangeGuid"
+    , "ExternalDirectoryObjectId"
+    , "DisplayName"
+    , "PrimarySmtpAddress"
+    , "EmailAddresses"
+    , "Alias"
+    , "RecipientTypeDetails"
+)
+
+# PowerShell commands to import
+# Use Get-EXORecipient because it is faster and supports server-side filtering
+$commands = @(
+    "Get-Recipient"
+    , "Get-EXORecipient"
+)
+
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+
+# Set debug logging
+$VerbosePreference = "SilentlyContinue"
+$InformationPreference = "Continue"
+$WarningPreference = "Continue"
+
+#region functions
+function Get-MSEntraCertificate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificateBase64String,
+        
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]
+        $CertificatePassword
+    )
+    try {
+        $rawCertificate = [system.convert]::FromBase64String($CertificateBase64String)
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $CertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+        Write-Output $certificate
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+#endregion functions
+
+try {
     $actionMessage = "importing module [ExchangeOnlineManagement]"
     $importModuleSplatParams = @{
         Name        = "ExchangeOnlineManagement"
@@ -391,14 +1602,15 @@ try {
     }
     $null = Import-Module @importModuleSplatParams
 
-    #region Retrieving certificate
-    $actionMessage = "retrieving certificate"
-    $certificate = Get-MSEntraCertificate
-    #endregion Retrieving certificate
-    
-    #region Connect to Microsoft Exchange Online
+    # Convert base64 certificate string to certificate object
+    $actionMessage = "converting base64 certificate string to certificate object"
+
+    $certificate = Get-MSEntraCertificate -CertificateBase64String $EntraIdCertificateBase64String -CertificatePassword $EntraIdCertificatePassword
+
+    # Connect to Microsoft Exchange Online
     # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
     $actionMessage = "connecting to Microsoft Exchange Online"
+
     $createExchangeSessionSplatParams = @{
         Organization          = $EntraIdOrganization
         AppID                 = $EntraIdAppId
@@ -411,14 +1623,53 @@ try {
         SkipLoadingFormatData = $true
         ErrorAction           = "Stop"
     }
+
     $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
-    Write-Information "Connected to Microsoft Exchange Online"
-} 
+
+    # Get groups
+    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-exorecipient?view=exchange-ps
+    $actionMessage = "querying distribution groups and mail-enabled security groups that match filter [$($filter)]"
+
+    $getGroupsSplatParams = @{
+        ResultSize  = "Unlimited"
+        Filter      = $filter
+        Properties  = $propertiesToSelect
+        ErrorAction = 'Stop'
+    }
+
+    $groups = Get-EXORecipient @getGroupsSplatParams | Select-Object -Property $propertiesToSelect
+    Write-Information "Queried distribution groups and mail-enabled security groups that match filter [$($filter)]. Result count: $(($groups | Measure-Object).Count)"
+
+    # Sort and Send results to HelloID
+    $actionMessage = "sending results to HelloID"
+    $groups | Sort-Object -Property DisplayName | ForEach-Object {
+        $groupType = switch ($_.RecipientTypeDetails) {
+            "MailUniversalDistributionGroup" { "Distribution Group" }
+            "MailUniversalSecurityGroup" { "Mail-enabled Security Group" }
+            default { "$($_.RecipientTypeDetails)" }
+        }
+
+        Write-Output @{
+            Id                        = $_.Id
+            Guid                      = $_.Guid
+            ExchangeGuid              = $_.ExchangeGuid
+            ExternalDirectoryObjectId = $_.ExternalDirectoryObjectId
+            DisplayName               = $_.DisplayName
+            PrimarySmtpAddress        = $_.PrimarySmtpAddress
+            EmailAddresses            = $_.EmailAddresses
+            Alias                     = $_.Alias
+            RecipientTypeDetails      = $_.RecipientTypeDetails
+            GroupType                 = $groupType
+            mailPrefix                = ($_.PrimarySmtpAddress -split '@')[0]
+            mailSuffix                = ($_.PrimarySmtpAddress -split '@')[1]
+        }
+    } 
+}
 catch {
     $ex = $PSItem
     if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {
         $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)"
-        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"        
+        $auditMessage = "Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)"
     }
     else {
         $warningMessage = "Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
@@ -426,70 +1677,7 @@ catch {
     }
     Write-Warning $warningMessage
     Write-Error $auditMessage
-}
-
-
-try{
-    #region check distribution group
-    $actionMessage = "getting distribution groups"
-
-    if (-not [String]::IsNullOrEmpty($searchValue)) {
-        Write-Information "searchQuery: $searchQuery"
-
-        switch ($GroupType) {
-            "Distribution Group" { $recipientTypeDetails = "MailUniversalDistributionGroup" }
-            "Mail-enabled Security Group" { $recipientTypeDetails = "MailUniversalSecurityGroup" }
-            default { $recipientTypeDetails = $null }
-        }
-
-        $baseFilter = "Alias -like '$searchQuery' -or DisplayName -like '$searchQuery' -or Name -like '$searchQuery'"
-
-        if ($null -ne $recipientTypeDetails) {
-            $filterString = "{RecipientTypeDetails -eq '$recipientTypeDetails' -and ($baseFilter)}"
-        }
-        else {
-            $filterString = "{$baseFilter}"
-        }
-
-        $DistributionGroupParams = @{
-            Filter      = $filterString
-            ResultSize  = "Unlimited"
-            Verbose     = $false
-            ErrorAction = "Stop"
-        }
-
-        $groups = Get-DistributionGroup @DistributionGroupParams
-
-        $resultCount = @($groups).Count
-        
-        Write-Information "Result count: $resultCount"
-        
-        if ($resultCount -gt 0) {
-            foreach ($group in $groups) {
-                $returnObject = @{
-                    name               = "$( $group.DisplayName )";
-                    id                 = "$( $group.ExternalDirectoryObjectId )";
-                    primarySmtpAddress = "$( $group.PrimarySmtpAddress )";
-                    Alias              = "$( $group.alias )";
-                }
-
-                Write-Output $returnObject
-            }
-        }
-    }
-    #endregion check distribution group           
-}
-catch {
-    $ex = $PSItem
-    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
-        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-        $errorMessage = ($ex.ErrorDetails.Message | Convertfrom-json).error_description
-    }
-    else {
-        $errorMessage = $($ex.Exception.message)
-    }
-
-    Write-Error "Error $actionMessage for Exchange Online distribution groups with the query [$searchQuery]. Error: $errorMessage"
+    # exit # use when using multiple try/catch and the script must stop
 }
 finally {
     # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps
@@ -498,231 +1686,25 @@ finally {
         ErrorAction = "Stop"
     }
     $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams
-    Write-Information "Disconnected from Microsoft Exchange Online"
 }
-#endregion lookup
 '@ 
 $tmpModel = @'
-[{"key":"Alias","type":0},{"key":"name","type":0},{"key":"id","type":0},{"key":"primarySmtpAddress","type":0}]
+[{"key":"Id","type":0},{"key":"mailSuffix","type":0},{"key":"Alias","type":0},{"key":"EmailAddresses","type":0},{"key":"ExchangeGuid","type":0},{"key":"ExternalDirectoryObjectId","type":0},{"key":"PrimarySmtpAddress","type":0},{"key":"RecipientTypeDetails","type":0},{"key":"DisplayName","type":0},{"key":"mailPrefix","type":0},{"key":"GroupType","type":0},{"key":"Guid","type":0}]
 '@ 
 $tmpInput = @'
 [{"description":null,"translateDescription":false,"inputFieldType":1,"key":"searchValue","type":0,"options":1}]
 '@ 
 $dataSourceGuid_0 = [PSCustomObject]@{} 
 $dataSourceGuid_0_Name = @'
-Exchange-online-distribution-group-update | Generate-table-update
+Exchange-online-distribution-group-update | EXO-Get-Distribution-Group
 '@ 
 Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_0_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "False" -returnObject ([Ref]$dataSourceGuid_0) 
-<# End: DataSource "Exchange-online-distribution-group-update | Generate-table-update" #>
-
-<# Begin: DataSource "Exchange-online-distribution-group-update | function-check-online-group-exists" #>
-$tmpPsScript = @'
-# Enable TLS1.2
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
-
-$VerbosePreference = "SilentlyContinue"
-$InformationPreference = "Continue"
-$WarningPreference = "Continue"
-
-$outputText = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-# variables configured in form:
-$Name = $datasource.Name
-$currentName = $datasource.SelectedSM.Name
-$currentPrimarySmtpAddress = $datasource.SelectedSM.primarySmtpAddress
-$currentExchangeGuid = $datasource.SelectedSM.id
-$PrimarySmtpAddress = $datasource.PrimarySmtpAddress
-$currentAlias = $datasource.SelectedSM.alias
-$Alias = $datasource.Alias
-$Domain = $PrimarySmtpAddress -Split '@'
-$Domain = $Domain[1]
-
-# PowerShell commands to import
-$commands = @("Get-User", "Get-DistributionGroup")
-#endregion init
-
-function Get-MSEntraCertificate {
-    [CmdletBinding()]
-    param()
-    try {
-        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)
-        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
-        Write-Output $certificate
-    }
-    catch {
-        $PSCmdlet.ThrowTerminatingError($_)
-    }
-}
-
-
-try {
-    if (($currentName -eq $Name) -and ($currentPrimarySmtpAddress -eq $PrimarySmtpAddress) -and ($currentAlias -eq $Alias)) {
-        $outputText.Add([PSCustomObject]@{
-                Message = "Name [$currentName] not changed"
-                IsError = $true
-            })
-        $outputText.Add([PSCustomObject]@{
-                Message = "PrimarySmtpAddress [$currentPrimarySmtpAddress] not changed"
-                IsError = $true
-            })
-        $outputText.Add([PSCustomObject]@{
-                Message = "Alias [$currentAlias] not changed"
-                IsError = $true
-            })
-    }
-
-    if (-not($outputText.isError -contains - $true)) {
-        $actionMessage = "importing module [ExchangeOnlineManagement]"
-        $importModuleSplatParams = @{
-            Name        = "ExchangeOnlineManagement"
-            Cmdlet      = $commands
-            Verbose     = $false
-            ErrorAction = "Stop"
-        }
-        $null = Import-Module @importModuleSplatParams
-
-        #region Retrieving certificate
-        $actionMessage = "retrieving certificate"
-        $certificate = Get-MSEntraCertificate
-        #endregion Retrieving certificate
-        
-        #region Connect to Microsoft Exchange Online
-        # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps
-        $actionMessage = "connecting to Microsoft Exchange Online"
-        $createExchangeSessionSplatParams = @{
-            Organization          = $EntraIdOrganization
-            AppID                 = $EntraIdAppId
-            Certificate           = $certificate
-            CommandName           = $commands
-            ShowBanner            = $false
-            ShowProgress          = $false
-            TrackPerformance      = $false
-            SkipLoadingCmdletHelp = $true
-            SkipLoadingFormatData = $true
-            ErrorAction           = "Stop"
-        }
-        $null = Connect-ExchangeOnline @createExchangeSessionSplatParams
-        Write-Information "Connected to Microsoft Exchange Online"
-        
-        # Prepare query params for distribution groups (scan all to validate uniqueness)
-        $DistributionGroupParams = @{
-            ResultSize  = 'Unlimited'
-            ErrorAction = 'Stop'
-        }
-
-        $DistributionGroups = Get-DistributionGroup @DistributionGroupParams
-
-        if (-not $DistributionGroups) {
-            Write-Information  "Distribution Group [$Name] is available"
-            $outputText.Add([PSCustomObject]@{
-                    Message = "Distribution Group [$Name] is available"
-                    IsError = $false
-                })
-        }     
-        else {
-            foreach ($record in $DistributionGroups) {
-                # Determine a stable identifier for the group (prefer ExternalDirectoryObjectId, then Guid, then Identity)
-                $recordId = $record.ExternalDirectoryObjectId
-                if (-not $recordId) { $recordId = $record.Guid }
-                if (-not $recordId) { $recordId = $record.Identity }
-
-                if ((($record.Name -eq $Name) -or ($record.DisplayName -eq $Name)) -and ($recordId -ne $currentExchangeGuid)) {
-                    $outputText.Add([PSCustomObject]@{
-                            Message = "Name [$Name] not unique, found on [$($record.Name)]"
-                            IsError = $true
-                        })
-                }
-                if (($record.Alias -eq $Alias) -and ($recordId -ne $currentExchangeGuid)) {
-                    $outputText.Add([PSCustomObject]@{
-                            Message = "Alias [$Alias] not unique, found on [$($record.Name)]"
-                            IsError = $true
-                        })
-                }
-                if ((($record.EmailAddresses -eq "SMTP:$PrimarySmtpAddress") -or ($record.ProxyAddresses -eq "smtp:$PrimarySmtpAddress")) -and ($recordId -ne $currentExchangeGuid)) {
-                    $outputText.Add([PSCustomObject]@{
-                            Message = "PrimarySmtpAddress [$PrimarySmtpAddress] not unique, found on [$($record.Name)]"
-                            IsError = $true
-                        })
-                }
-                elseif (($record.EmailAddresses -eq "SMTP:$Alias@$Domain") -or ($record.ProxyAddresses -eq "smtp:$Alias@$Domain") -and ($recordId -ne $currentExchangeGuid)) {
-                    $outputText.Add([PSCustomObject]@{
-                            Message = "ProxyAddress [$Alias@$Domain] not unique, found on [$($record.Name)]"
-                            IsError = $true
-                        })
-                }
-            }
-        }
-        #endregion check distribution group           
-    }
-
-    if ($outputText.isError -contains - $true) {
-        $outputMessage = "Invalid"
-    }
-    else {
-        $outputMessage = "Valid"
-        $outputText.Add([PSCustomObject]@{
-                Message = "Name [$Name] unique"
-                IsError = $false
-            })
-        $outputText.Add([PSCustomObject]@{
-                Message = "Alias [$Alias] unique"
-                IsError = $false
-            })
-        $outputText.Add([PSCustomObject]@{
-                Message = "PrimarySmtpAddress [$PrimarySmtpAddress] unique"
-                IsError = $false
-            })
-    }
-
-    foreach ($text in $outputText) {
-        $outputMessage += " | " + $($text.Message)
-    }
-
-    $returnObject = @{
-        text = $outputMessage
-    }
-
-    Write-Output $returnObject   
-}
-catch {
-    $ex = $PSItem
-    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
-        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-        $errorMessage = ($ex.ErrorDetails.Message | Convertfrom-json).error_description
-    }
-    else {
-        $errorMessage = $($ex.Exception.message)
-    }
-
-    Write-Error "Error $actionMessage for Exchange Online distribution group [$Name]. Error: $errorMessage"
-    
-    $outputMessage = "Invalid | Error $actionMessage for Exchange Online distribution group [$Name]. Error: $errorMessage"
-    $returnObject = @{
-        text = $outputMessage
-    }
-}
-finally {
-    Write-Output $returnObject 
-}
-#endregion lookup
-'@ 
-$tmpModel = @'
-[{"key":"text","type":0}]
-'@ 
-$tmpInput = @'
-[{"description":null,"translateDescription":false,"inputFieldType":1,"key":"Name","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"PrimarySmtpAddress","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"Alias","type":0,"options":1},{"description":null,"translateDescription":false,"inputFieldType":1,"key":"SelectedSM","type":0,"options":1}]
-'@ 
-$dataSourceGuid_1 = [PSCustomObject]@{} 
-$dataSourceGuid_1_Name = @'
-Exchange-online-distribution-group-update | function-check-online-group-exists
-'@ 
-Invoke-HelloIDDatasource -DatasourceName $dataSourceGuid_1_Name -DatasourceType "4" -DatasourceInput $tmpInput -DatasourcePsScript $tmpPsScript -DatasourceModel $tmpModel -DataSourceRunInCloud "False" -returnObject ([Ref]$dataSourceGuid_1) 
-<# End: DataSource "Exchange-online-distribution-group-update | function-check-online-group-exists" #>
+<# End: DataSource "Exchange-online-distribution-group-update | EXO-Get-Distribution-Group" #>
 <# End: HelloID Data sources #>
 
 <# Begin: Dynamic Form "Exchange online - Distribution Group - Update" #>
 $tmpSchema = @"
-[{"label":"Search Group","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange Online takes an average of +/- 10 seconds.","titleField":"","bannerType":"Info","useBody":true},"type":"textbanner","summaryVisibility":"Show","body":"Please wait so we can retreive the input.","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"searchfield","templateOptions":{"label":"Search","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"distributionGroup","templateOptions":{"label":"Distribution groups","required":true,"grid":{"columns":[{"headerName":"Name","field":"name"},{"headerName":"Alias","field":"Alias"},{"headerName":"Primary Smtp Address","field":"primarySmtpAddress"},{"headerName":"Id","field":"id"}],"height":300,"rowSelection":"single"},"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_0","input":{"propertyInputs":[{"propertyName":"searchValue","otherFieldValue":{"otherFieldKey":"searchfield"}}]}},"useFilter":true,"useDefault":false,"searchPlaceHolder":"Search this data","allowCsvDownload":true},"type":"grid","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":true}]},{"label":"Edit Group","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange Online takes an average of +/- 10 seconds.","titleField":"","bannerType":"Info","useBody":true},"type":"textbanner","summaryVisibility":"Show","body":"Please wait so we can validate the input.","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"name","templateOptions":{"label":"name","placeholder":"","required":true,"minLength":2,"useDependOn":true,"dependOn":"distributionGroup","dependOnProperty":"name"},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"alias","templateOptions":{"label":"Alias","useDependOn":true,"dependOn":"distributionGroup","dependOnProperty":"Alias","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"primarySmtpAddress","templateOptions":{"label":"PrimarySmtpAddress","useDependOn":true,"dependOn":"distributionGroup","dependOnProperty":"primarySmtpAddress","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"Validation","templateOptions":{"label":"Validate","readonly":true,"useDataSource":true,"pattern":"^Valid.*","dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_1","input":{"propertyInputs":[{"propertyName":"Name","otherFieldValue":{"otherFieldKey":"name"}},{"propertyName":"PrimarySmtpAddress","otherFieldValue":{"otherFieldKey":"primarySmtpAddress"}},{"propertyName":"Alias","otherFieldValue":{"otherFieldKey":"alias"}},{"propertyName":"SelectedSM","otherFieldValue":{"otherFieldKey":"searchfield"}}]}},"displayField":"text","required":true},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false}]}]
+[{"label":"Select group","fields":[{"templateOptions":{"title":"Retrieving this information from Exchange takes an average of +/- 10 seconds. Please wait while the data is loaded.","titleField":"","bannerType":"Info","useBody":false},"type":"textbanner","summaryVisibility":"Hide element","body":"Text Banner Content","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"searchfield","templateOptions":{"label":"Search (wildcard search in Name and Email addresses)","placeholder":"Name or Email addresses (use * to search all mail groups)","required":true},"type":"input","summaryVisibility":"Hide element","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"gridGroup","templateOptions":{"label":"Distribution groups","required":true,"grid":{"columns":[{"headerName":"Display Name","field":"DisplayName"},{"headerName":"Primary Smtp Address","field":"PrimarySmtpAddress"},{"headerName":"Alias","field":"Alias"},{"headerName":"Group Type","field":"GroupType"}],"height":300,"rowSelection":"single"},"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_0","input":{"propertyInputs":[{"propertyName":"searchValue","otherFieldValue":{"otherFieldKey":"searchfield"}}]}},"useFilter":true,"useDefault":false,"searchPlaceHolder":"Search this data","allowCsvDownload":false},"type":"grid","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":true}]},{"label":"Update group","fields":[{"key":"displayName","templateOptions":{"label":"Display name","placeholder":"IT department","required":true,"pattern":"^[A-Za-z0-9Ã?-Ã¿ .,_\u0027-]{1,256}$","minLength":1,"maxLength":256,"useDependOn":true,"dependOn":"gridGroup","dependOnProperty":"DisplayName"},"validation":{"messages":{"pattern":""}},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"nameValidation","templateOptions":{"label":"Display name validation","placeholder":"Display name will be validated on uniqnueness in Entra ID","required":true,"pattern":"^Valid.*","useDataSource":true,"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_1","input":{"propertyInputs":[{"propertyName":"displayName","otherFieldValue":{"otherFieldKey":"displayName"}},{"propertyName":"selectedGroup","otherFieldValue":{"otherFieldKey":"gridGroup"}}]}},"displayField":"output","readonly":true},"hideExpression":"!model[\"searchfield\"]","type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"templateOptions":{"title":"This field shows the mailbox’s current primary email address","titleField":"","bannerType":"Info","useBody":true},"type":"textbanner","summaryVisibility":"Show","body":"If you change this value, the new address will be added as an **alias** (proxy address) by default.  \r\nIt will *not* replace the primary email address unless you explicitly select the option **\"Set as primary email address\"**.  ","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"formRow","templateOptions":{},"fieldGroup":[{"key":"mailPrefix","templateOptions":{"label":"Email address","placeholder":"it-department","required":true,"pattern":"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$","minLength":1,"maxLength":200,"useDependOn":true,"dependOn":"gridGroup","dependOnProperty":"mailPrefix"},"validation":{"messages":{"pattern":""}},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"mailDomain","templateOptions":{"label":"Mail domain","required":true,"useObjects":false,"useDataSource":true,"useFilter":false,"options":["Option 1","Option 2","Option 3"],"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_2","input":{"propertyInputs":[{"propertyName":"selectedGroup","otherFieldValue":{"otherFieldKey":"gridGroup"}}]}},"valueField":"id","textField":"id","useDefault":true,"defaultSelectorProperty":"id"},"type":"dropdown","summaryVisibility":"Show","textOrLabel":"text","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false}],"type":"formrow","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"blnSetAsPrimaryEmail","templateOptions":{"label":"Set as primary email address?","useSwitch":true,"checkboxLabel":"Set as primary email address"},"type":"boolean","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"mailValidation","templateOptions":{"label":"Email address validation","useDataSource":true,"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_3","input":{"propertyInputs":[{"propertyName":"mailPrefix","otherFieldValue":{"otherFieldKey":"mailPrefix"}},{"propertyName":"mailDomain","otherFieldValue":{"otherFieldKey":"mailDomain"}},{"propertyName":"selectedGroup","otherFieldValue":{"otherFieldKey":"gridGroup"}}]}},"displayField":"output","required":true,"readonly":true,"pattern":"^Valid.*","placeholder":"Email address will be validated on uniqnueness in Entra ID"},"hideExpression":"!model[\"mailPrefix\"]","type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"templateOptions":{"title":"The alias (mailNickname) is a short name used as an internal identifier for the mailbox","titleField":"","bannerType":"Info","useBody":true},"type":"textbanner","summaryVisibility":"Show","body":"It is *not* the same as any of the group’s email addresses.  \r\nChanging the alias does **not** automatically update the primary or secondary SMTP addresses.\r\n\r\nThe alias can only have **one** value.  \r\nIf you change it, the previous alias is simply overwritten and will not be stored as an additional address.\r\n\r\nIf you do not provide an alias, the username from the email address will be used automatically.\r\n\r\nUse only letters, numbers, and periods (no spaces).  \r\nDo not include a domain (no \"@\").","requiresTemplateOptions":false,"requiresKey":false,"requiresDataSource":false},{"key":"alias","templateOptions":{"label":"Alias (mailNickName)","pattern":"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$","placeholder":"it-dep","useDependOn":true,"dependOn":"gridGroup","dependOnProperty":"Alias"},"validation":{"messages":{"pattern":""}},"type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false},{"key":"aliasValidation","templateOptions":{"label":"Alias (mailNickName) validation","readonly":true,"pattern":"^Valid.*","useDataSource":true,"dataSourceConfig":{"dataSourceGuid":"$dataSourceGuid_4","input":{"propertyInputs":[{"propertyName":"alias","otherFieldValue":{"otherFieldKey":"alias"}},{"propertyName":"mailDomain","otherFieldValue":{"otherFieldKey":"mailDomain"}},{"propertyName":"selectedGroup","otherFieldValue":{"otherFieldKey":"gridGroup"}}]}},"displayField":"output","required":true,"placeholder":"Alias will be validated on uniqnueness in Entra ID"},"hideExpression":"!model[\"alias\"]","type":"input","summaryVisibility":"Show","requiresTemplateOptions":true,"requiresKey":true,"requiresDataSource":false}]}]
 "@ 
 
 $dynamicFormGuid = [PSCustomObject]@{} 
@@ -787,7 +1769,7 @@ $delegatedFormName = @'
 Exchange online - Distribution Group - Update
 '@
 $tmpTask = @'
-{"name":"Exchange online - Distribution Group - Update","script":"# Enable TLS1.2\n[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12\n\n$VerbosePreference = \"SilentlyContinue\"\n$InformationPreference = \"Continue\"\n$WarningPreference = \"Continue\"\n\n# variables configured in form:\n$exchangeDGGUID = $form.distributionGroup.id\n$name = $form.name\n$alias = $form.alias\n$primarySmtpAddress = $form.primarySmtpAddress\n\n# PowerShell commands to import\n$commands = @(\"Get-DistributionGroup\", \"Set-DistributionGroup\")\n#endregion init\n\n#region functions\n\n#endregion functions\n\nfunction Get-MSEntraCertificate {\n    [CmdletBinding()]\n    param()\n    try {\n        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)\n        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)\n        Write-Output $certificate\n    }\n    catch {\n        $PSCmdlet.ThrowTerminatingError($_)\n    }\n}\n\n#region Import module & connect\ntry {    \n    $actionMessage = \"importing module [ExchangeOnlineManagement]\"\n    $importModuleSplatParams = @{\n        Name        = \"ExchangeOnlineManagement\"\n        Verbose     = $false\n        ErrorAction = \"Stop\"\n    }\n    $null = Import-Module @importModuleSplatParams\n\n    #region Retrieving certificate\n    $actionMessage = \"retrieving certificate\"\n    $certificate = Get-MSEntraCertificate\n    #endregion Retrieving certificate\n    \n    #region Connect to Microsoft Exchange Online\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps\n    $actionMessage = \"connecting to Microsoft Exchange Online\"\n    $createExchangeSessionSplatParams = @{\n        Organization          = $EntraIdOrganization\n        AppID                 = $EntraIdAppId\n        Certificate           = $certificate\n        CommandName           = $commands\n        ShowBanner            = $false\n        ShowProgress          = $false\n        TrackPerformance      = $false\n        SkipLoadingCmdletHelp = $true\n        SkipLoadingFormatData = $true\n        ErrorAction           = \"Stop\"\n    }\n    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams\n    Write-Information \"Connected to Microsoft Exchange Online\"\n} \ncatch {\n    $ex = $PSItem\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"        \n    }\n    else {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\n    }\n    Write-Warning $warningMessage\n    Write-Error $auditMessage\n}\n\n\n\n#region get distribution group\ntry{\n    $GetDistributionGroupParams = @{\n        Identity    = $exchangeDGGUID\n        ErrorAction = 'Stop'\n    }\n\n    $distributionGroup = Get-DistributionGroup @GetDistributionGroupParams\n    $currentAddresses = $distributionGroup.EmailAddresses\n    $proxyAddresses = @()\n    foreach ($address in $currentAddresses) {\n        if ($address.StartsWith('SMTP:')) {\n            $address = $address -replace 'SMTP:', 'smtp:'\n        }\n        if ($address -ne \"smtp:\" + $primarySmtpAddress) {\n            $proxyAddresses += $address\n        }\n    }\n\n    # Set new primary SMTP as uppercase 'SMTP:' and keep other proxies as lowercase 'smtp:'\n    $proxyAddresses += 'SMTP:' + $primarySmtpAddress\n\n    #region update distribution group\n    $actionMessage = \"updating distribution group\"\n\n    $UpdateDistributionGroupParams = @{\n        Identity       = $exchangeDGGUID\n        DisplayName    = $name\n        Name           = $name\n        EmailAddresses = $proxyAddresses\n        Alias          = $alias\n        ErrorAction    = 'Stop'\n    }\n\n    Set-DistributionGroup @UpdateDistributionGroupParams\n \n    Write-Information  \"Distribution Group [$name] updated successfully\" \n    $Log = @{\n        Action            = \"UpdateResource\" # optional. ENUM (undefined = default) \n        System            = \"Exchange Online\" # optional (free format text) \n        Message           = \"Distribution Group [$name] updated successfully\"  # required (free format text) \n        IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \n        TargetDisplayName = $name # optional (free format text) \n        TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) \n    }\n    #send result back  \n    Write-Information -Tags \"Audit\" -MessageData $log \n}\ncatch {\n    $ex = $PSItem\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"\n    }\n    else {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\n    }\n   $Log = @{\n        Action            = \"UpdateResource\" # optional. ENUM (undefined = default) \n        System            = \"Exchange Online\" # optional (free format text) \n        Message           = \"Error $actionMessage for Exchange Online distribution group [$name]\" # required (free format text) \n        IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \n        TargetDisplayName = $name # optional (free format text) \n        TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) \n    }\n    Write-Information -Tags \"Audit\" -MessageData $log\n    Write-Warning $warningMessage\n    Write-Error $auditMessage\n    # exit # use when using multiple try/catch and the script must stop\n}\nfinally {\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps\n    $deleteExchangeSessionSplatParams = @{\n        Confirm     = $false\n        ErrorAction = \"Stop\"\n    }\n    $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams\n    Write-Information \"Disconnected from Microsoft Exchange Online\"\n}","runInCloud":false}
+{"name":"Exchange online - Distribution Group - Update","script":"# Enable TLS1.2\n[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12\n\n$VerbosePreference = \"SilentlyContinue\"\n$InformationPreference = \"Continue\"\n$WarningPreference = \"Continue\"\n\n# variables configured in form:\n$exchangeDGGUID = $form.gridGroup.Guid\n$currentAddresses = $form.gridGroup.EmailAddresses\n$displayName = $form.displayName\n$alias = $form.alias\n$mailboxMailPrefix = $form.mailPrefix\n$mailboxMailDomain = $form.mailDomain.id\n$blnSetAsPrimaryEmail = if ([string]::IsNullOrWhiteSpace($form.blnSetAsPrimaryEmail)) { $false } else { [System.Convert]::ToBoolean($form.blnSetAsPrimaryEmail) }\n# Build proxy address with appropriate prefix based on whether it should be primary\nif ($blnSetAsPrimaryEmail) {\n    $mailboxProxyAddress = \"SMTP:$($mailboxMailPrefix)@$($mailboxMailDomain)\"\n}\nelse {\n    $mailboxProxyAddress = \"smtp:$($mailboxMailPrefix)@$($mailboxMailDomain)\"\n}\n\n# PowerShell commands to import\n$commands = @(\"Set-DistributionGroup\")\n#endregion init\n\n#region functions\n\n#endregion functions\n\nfunction Get-MSEntraCertificate {\n    [CmdletBinding()]\n    param()\n    try {\n        $rawCertificate = [system.convert]::FromBase64String($EntraIdCertificateBase64String)\n        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rawCertificate, $EntraIdCertificatePassword, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)\n        Write-Output $certificate\n    }\n    catch {\n        $PSCmdlet.ThrowTerminatingError($_)\n    }\n}\n\n#region Import module \u0026 connect\ntry {    \n    $actionMessage = \"importing module [ExchangeOnlineManagement]\"\n    $importModuleSplatParams = @{\n        Name        = \"ExchangeOnlineManagement\"\n        Verbose     = $false\n        ErrorAction = \"Stop\"\n    }\n    $null = Import-Module @importModuleSplatParams\n\n    #region Retrieving certificate\n    $actionMessage = \"retrieving certificate\"\n    $certificate = Get-MSEntraCertificate\n    #endregion Retrieving certificate\n    \n    #region Connect to Microsoft Exchange Online\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/connect-exchangeonline?view=exchange-ps\n    $actionMessage = \"connecting to Microsoft Exchange Online\"\n    $createExchangeSessionSplatParams = @{\n        Organization          = $EntraIdOrganization\n        AppID                 = $EntraIdAppId\n        Certificate           = $certificate\n        CommandName           = $commands\n        ShowBanner            = $false\n        ShowProgress          = $false\n        TrackPerformance      = $false\n        SkipLoadingCmdletHelp = $true\n        SkipLoadingFormatData = $true\n        ErrorAction           = \"Stop\"\n    }\n    $null = Connect-ExchangeOnline @createExchangeSessionSplatParams\n    Write-Information \"Connected to Microsoft Exchange Online\"\n} \ncatch {\n    $ex = $PSItem\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"        \n    }\n    else {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\n    }\n    Write-Warning $warningMessage\n    Write-Error $auditMessage\n}\n\n\n\n#region get distribution group\ntry {\n    # Get current email addresses and prepare new email address list, while keeping existing proxy addresses (except the current address if already present)\n    $proxyAddresses = @()\n    \n    # Extract the email address without prefix for comparison\n    $emailAddressOnly = $mailboxProxyAddress -replace \u0027^(smtp|SMTP):\u0027, \u0027\u0027\n    \n    foreach ($address in $currentAddresses) {\n        # If setting as primary, convert any existing primary SMTP to secondary\n        if ($blnSetAsPrimaryEmail -and $address.StartsWith(\u0027SMTP:\u0027)) {\n            $address = $address -replace \u0027SMTP:\u0027, \u0027smtp:\u0027\n        }\n        # Remove the address if it already exists (to avoid duplicates)\n        if ($address -ne \"smtp:$emailAddressOnly\" -and $address -ne \"SMTP:$emailAddressOnly\") {\n            $proxyAddresses += $address\n        }\n    }\n    # Add the new proxy address\n    $proxyAddresses += $mailboxProxyAddress\n\n    #region update distribution group\n    $actionMessage = \"updating distribution group\"\n\n    $UpdateDistributionGroupParams = @{\n        Identity                        = $exchangeDGGUID\n        DisplayName                     = $displayName\n        Name                            = $displayName\n        EmailAddresses                  = $proxyAddresses\n        Alias                           = $alias\n        BypassSecurityGroupManagerCheck = $true    \n        ErrorAction                     = \u0027Stop\u0027\n    }\n\n    Set-DistributionGroup @UpdateDistributionGroupParams\n \n    Write-Information  \"Distribution Group [$displayName] updated successfully\" \n    $Log = @{\n        Action            = \"UpdateResource\" # optional. ENUM (undefined = default) \n        System            = \"Exchange Online\" # optional (free format text) \n        Message           = \"Distribution Group [$displayName] updated successfully\"  # required (free format text) \n        IsError           = $false # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \n        TargetDisplayName = $displayName # optional (free format text) \n        TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) \n    }\n    #send result back  \n    Write-Information -Tags \"Audit\" -MessageData $log \n}\ncatch {\n    $ex = $PSItem\n    if (-not [string]::IsNullOrEmpty($ex.Exception.Data.RemoteException.Message)) {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Data.RemoteException.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Data.RemoteException.Message)\"\n    }\n    else {\n        $warningMessage = \"Error at Line [$($ex.InvocationInfo.ScriptLineNumber)]: $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)\"\n        $auditMessage = \"Error $($actionMessage). Error: $($ex.Exception.Message)\"\n    }\n    $Log = @{\n        Action            = \"UpdateResource\" # optional. ENUM (undefined = default) \n        System            = \"Exchange Online\" # optional (free format text) \n        Message           = \"Error $actionMessage for Exchange Online distribution group [$name]\" # required (free format text) \n        IsError           = $true # optional. Elastic reporting purposes only. (default = $false. $true = Executed action returned an error) \n        TargetDisplayName = $name # optional (free format text) \n        TargetIdentifier  = $([string]$exchangeDGGUID) # optional (free format text) \n    }\n    Write-Information -Tags \"Audit\" -MessageData $log\n    Write-Warning $warningMessage\n    Write-Error $auditMessage\n    # exit # use when using multiple try/catch and the script must stop\n}\nfinally {\n    # Docs: https://learn.microsoft.com/en-us/powershell/module/exchange/disconnect-exchangeonline?view=exchange-ps\n    $deleteExchangeSessionSplatParams = @{\n        Confirm     = $false\n        ErrorAction = \"Stop\"\n    }\n    $null = Disconnect-ExchangeOnline @deleteExchangeSessionSplatParams\n    Write-Information \"Disconnected from Microsoft Exchange Online\"\n}","runInCloud":false}
 '@ 
 
 Invoke-HelloIDDelegatedForm -DelegatedFormName $delegatedFormName -DynamicFormGuid $dynamicFormGuid -AccessGroups $delegatedFormAccessGroupGuids -Categories $delegatedFormCategoryGuids -UseFaIcon "True" -FaIcon "fa fa-users" -task $tmpTask -returnObject ([Ref]$delegatedFormRef) 
